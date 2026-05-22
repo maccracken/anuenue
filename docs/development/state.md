@@ -48,14 +48,17 @@ Brahmic spacing-mark sequences misclassify as advancing (errs on
 "more rainbow, not less"). ADR 0003 (M7) will record the trade.
 
 Next slot is **M4 — Animation Mode (v0.5.0)** per
-[roadmap.md](roadmap.md): `-a` / `-d <duration>` / `-S <speed>`
-plus cursor positioning + SIGINT handler. Dep gate: darshana::cursor
-(already in 0.5.x).
+[roadmap.md § M4](roadmap.md#m4--animation-mode-v050--next): `-a` /
+`-d <duration>` / `-S <speed>` + cursor positioning + SIGINT
+restore. Dep gate: confirm `darshana::cursor` covers save/restore
++ clear-line before opening v0.5.0; sandhi-bump darshana if not.
+Capability surface gains `rt_sigaction` for the SIGINT handler —
+call out in M8's audit.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.0.1` (in `cyrius.cyml [package].cyrius`)
-- Pin-lag spectrum: matches darshana 0.5.0 / sakshi 2.2.5 / agnostik 1.2.2 — all on 6.0.1; no lag at scaffold.
+- **Cyrius pin**: `6.0.1` (in `cyrius.cyml [package].cyrius`).
+- Pin-lag spectrum: aligned with darshana 0.5.1 / sakshi 2.2.5 / agnostik 1.2.2 — all on 6.0.1 since scaffold. Re-evaluate at each minor cut; sandhi-bump if a dep ships a 6.0.x+ upgrade we want.
 
 ## Source
 
@@ -68,8 +71,10 @@ plus cursor positioning + SIGINT handler. Dep gate: darshana::cursor
 
 The third file the M0 plan anticipated (`src/hsv.cyr`) still
 hasn't earned a split — `hsv_rainbow` is ~30 lines and lives in
-`filter.cyr`. Revisit at M3 (UTF-8 grapheme awareness) if the
-grapheme-boundary logic crowds the filter loop.
+`filter.cyr`. M3 added the UTF-8 / cluster surface to `filter.cyr`
+without crowding the HSV math; revisit only if M5 (perf pass)
+inlines a phase-cached escape buffer that wants to live next to
+the HSV→RGB geometry.
 
 ## Binary
 
@@ -103,7 +108,7 @@ Direct (declared in `cyrius.cyml`):
 | `darshana` | 0.5.1 | ANSI color escape generation (incl. **24-bit truecolor** added at 0.5.1 for anuenue's M1) | Live. Uses `tty_fg_rgb_buf` + `tty_sgr_reset_buf` in the line-buffer composition path. |
 | `sakshi` | 2.2.5 | Errors / tracing / structured logging | Standard wiring per first-party-standards |
 | `agnostik` | 1.2.2 | Shared Result / Error shapes | Standard wiring |
-| Cyrius stdlib | n/a | string, fmt, alloc, io, vec, str, syscalls, assert, bench | Auto-resolved via `cyrius deps` |
+| Cyrius stdlib | n/a | string, fmt, alloc, io, vec, str, syscalls, assert, bench, args, flags | Auto-resolved via `cyrius deps`. `args` + `flags` added at M2 for the v0.3.0 flag surface. |
 
 No pre-release / pre-1.0 deps on the critical path. No external (non-AGNOS) deps.
 
@@ -130,11 +135,13 @@ Anticipated at v0.7+:
   flag surface holds the line (no file-input flag, no config
   file, no themes); the ADR records the *why* before later
   milestones could tempt scope creep.
-- **`tests/anuenue.fcyr`** — fuzz harness stub still empty. The
-  M2 flag parser is now the natural target (random argv tokens →
-  flags_parse never crashes / always exits with a valid status).
-  Defer until M3 or whenever a parse-path bug is discovered in the
-  wild.
+- **`tests/anuenue.fcyr`** — fuzz harness stub still empty. Two
+  natural targets now: the M2 flag parser (random argv tokens →
+  `flags_parse` never crashes / always exits with a valid status)
+  and the M3 UTF-8 surface (`utf8_seq_len` over arbitrary byte
+  streams — already has invalid + truncated handling documented
+  and tested, fuzz would cement it). Defer until M4 or whenever a
+  parse-path / decode-path bug is discovered in the wild.
 - **DCE binary size after M3** — captured at 0.4.0 cut: 322 368
   bytes (+5 152 B vs 0.3.0; +18 000 B vs 0.2.0). Recapture at
   every minor cut.

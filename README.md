@@ -13,14 +13,23 @@ cyrius build src/main.cyr build/anuenue      # build
 cyrius test                                  # [build].test + tests/*.tcyr
 ```
 
-## Usage (when M1 lands)
+## Usage
 
 ```sh
 echo "AGNOS" | ./build/anuenue           # one-shot rainbow tint
+echo "AGNOS" | ./build/anuenue -s 100    # deterministic seed (testing / scripts)
+echo "AGNOS" | ./build/anuenue -p 13     # bigger phase step per character
 iam | ./build/anuenue                    # rainbow system-info splash
 bnrmr "AGNOS" | ./build/anuenue          # rainbow banner
-cat poem.txt | ./build/anuenue -a -d 5   # 5s animated mode
+./build/anuenue --version                # anuenue 0.4.0
+./build/anuenue --help                   # full flag surface
 ```
+
+**Flags shipped at v0.4.0**: `-h`/`--help`, `-V`/`--version`, `-p`/`--freq <N>` (phase step per cluster; default 7), `-s`/`--seed <N>` (starting hue phase — deterministic-output hook), `-F`/`--offset <N>` (additive phase offset, Ruby-lolcat compat).
+
+**UTF-8 / grapheme behavior**: cycle advances per *cluster*, not per byte. CJK / combining diacritics / ZWJ emoji sequences / regional-indicator flag pairs all get one phase advance each. Invalid UTF-8 → graceful per-byte cycling (never panics).
+
+**Coming in v0.5.0 (M4)**: `-a` / `-d <duration>` / `-S <speed>` animation mode. See [`docs/development/roadmap.md`](docs/development/roadmap.md).
 
 ## Why a Cyrius-native lolcat?
 
@@ -30,7 +39,7 @@ It's also the founder of the **pipe-decorator family** in AGNOS userland — std
 
 ## Project Status
 
-**v0.1.0 — Scaffold.** Repo exists, deps wired, docs scaffolded, build pipeline green. No filter logic yet — see [`docs/development/roadmap.md`](docs/development/roadmap.md) for the M0 → v1.0 plan and [`docs/development/state.md`](docs/development/state.md) for the live snapshot.
+**v0.4.0 — M3: UTF-8 Grapheme Awareness.** Pipe-purity proof (M1) + lolcat-equivalent flag surface (M2) + grapheme-cluster cycling (M3) all shipped. Next slot is **M4 — Animation Mode (v0.5.0)**. See [`docs/development/roadmap.md`](docs/development/roadmap.md) for the v1.0 plan and [`docs/development/state.md`](docs/development/state.md) for the live snapshot.
 
 ## Documentation
 
