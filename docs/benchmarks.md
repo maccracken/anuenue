@@ -165,15 +165,90 @@ chain. Kept regardless: clearer code, future-proof.
   3.8 ns/byte at the limit. Already counted in the median
   ns/byte figures above.
 
+## v0.7.0 — M6 (colour-mode negotiation)
+
+Three new flags (`--no-color` / `--force-color` / `--color`),
+mode-aware phase-cache build, four-mode taxonomy (TRUECOLOR /
+COLOR_256 / COLOR_16 / MONO) — all behavioural surface, no
+hot-path changes. `_emit_phase_esc` stays a memcpy regardless of
+mode (the table holds per-mode pre-formatted escapes).
+
+| Corpus           | ns/byte | Δ vs v0.6.0 |
+|------------------|---------|-------------|
+| ascii (no LF)    | ~47     | flat        |
+| ascii (w/ LFs)   | ~51     | flat        |
+| utf8 mixed       | ~43     | flat        |
+
+- **0.7.0 DCE size**: **349 832 bytes** (~342 KB; +14 672 B over
+  v0.6.0 for `src/color.cyr` + stdlib `getenv` / `strstr` pulls).
+- **0.7.1 (sandhi closeout)**: **350 488 bytes** (+656 B from
+  darshana 0.5.3's transitive `tty_itoa` linker pulls). Cap
+  raised 350 KB → 512 KB in this slot to absorb the bump.
+
+## v0.8.0 — M7 docs + M8 security audit
+
+Documentation cycle + first formal security audit. One HIGH
+finding (`_render_frame` long-cluster heap overflow) fixed
+in-cycle via mid-cluster flush guard; the filter path was not
+affected because it writes one codepoint per iteration. Filter
+hot-path unchanged; animation path picks up one additional
+per-byte check in the cluster-copy inner loop but the cost is
+amortised against the cluster-bytes copy.
+
+| Corpus           | ns/byte | Δ vs v0.7.1 |
+|------------------|---------|-------------|
+| ascii (no LF)    | ~46     | flat        |
+| ascii (w/ LFs)   | ~50     | flat        |
+| utf8 mixed       | ~42     | flat        |
+
+- **0.8.0 DCE size**: **351 200 bytes** (+712 B over v0.7.1 for
+  the mid-cluster guard + new tcyr M8 audit group).
+
+## v0.9.0 — Quality slot (fuzz + animation smoke + hsv split)
+
+No production-binary changes — quality-slot work landed entirely
+in tests, fuzz harnesses, and the `src/hsv.cyr` split (moving
+`hsv_rainbow` between files doesn't change linkage). DCE binary
+**byte-identical** to v0.8.0.
+
+| Corpus           | ns/byte | Δ vs v0.8.0 |
+|------------------|---------|-------------|
+| ascii (no LF)    | ~46     | flat        |
+| ascii (w/ LFs)   | ~50     | flat        |
+| utf8 mixed       | ~42     | flat        |
+
+- **0.9.0 DCE size**: **351 200 bytes** (±0 B vs v0.8.0).
+
+## v1.0.0 — GA
+
+Symbolic crystallisation of the v0.9.0 surface as the v1.x stable
+contract. No production code changes; perf and binary size carry
+through unchanged.
+
+| Corpus           | ns/byte | Δ vs v0.9.0 |
+|------------------|---------|-------------|
+| ascii (no LF)    | 45.71   | within noise |
+| ascii (w/ LFs)   | 49.75   | within noise |
+| utf8 mixed       | 41.47   | within noise |
+
+- **1.0.0 DCE size**: **351 200 bytes** (±0 B vs v0.9.0 / v0.8.0).
+- The DCE cap (512 KB) gives ~161 KB headroom for future v1.x
+  sandhi-bump-driven growth.
+
 ## Trend
 
-| Release | Per-byte ASCII (ns) | hsv_rainbow (ns) | tty_fg_rgb_buf (ns) | DCE size (B) |
-|---------|---------------------|------------------|---------------------|--------------|
-| v0.2.0  | 53                  | 8                | 45                  | 304 368      |
-| v0.3.0  | 53*                 | 8                | 45                  | 317 216      |
-| v0.4.0  | 86                  | 8                | 45                  | 322 368      |
-| v0.5.0  | 92†                 | 8                | 45                  | 334 120      |
-| v0.6.0  | **47**              | 8                | 45                  | 335 160      |
+| Release | Per-byte ASCII (ns) | hsv_rainbow (ns) | tty_fg_rgb_buf (ns) | DCE size (B) | Notes |
+|---------|---------------------|------------------|---------------------|--------------|-------|
+| v0.2.0  | 53                  | 8                | 45                  | 304 368      | M1 baseline |
+| v0.3.0  | 53*                 | 8                | 45                  | 317 216      | M2 flags |
+| v0.4.0  | 86                  | 8                | 45                  | 322 368      | M3 cluster classifier |
+| v0.5.0  | 92†                 | 8                | 45                  | 334 120      | M4 animation |
+| v0.6.0  | **47**              | 8                | 45                  | 335 160      | M5 perf pass — table cache |
+| v0.7.0  | ~47                 | 8                | 45                  | 349 832      | M6 colour-mode neg. |
+| v0.7.1  | ~46                 | 8                | 45                  | 350 488      | Sandhi (darshana 0.5.3) |
+| v0.8.0  | ~46                 | 8                | 45                  | 351 200      | M7 docs + M8 audit |
+| v0.9.0  | ~46                 | 8                | 45                  | 351 200      | Quality slot (fuzz) |
+| **v1.0.0** | **45.71**        | 8                | 45                  | 351 200      | **GA** |
 
 \* v0.3.0 added flag-parsing at startup but the filter hot path
 was unchanged; per-byte cost stayed flat.
@@ -183,3 +258,10 @@ was unchanged; per-byte cost stayed flat.
 numbers are within host-variance bounds of each other; the M5
 acceptance was scoped against the v0.4.0 floor as the regression
 to recover).
+
+Post-M6 figures are doc-rounded against host-variance jitter
+(the underlying `scripts/perf-bench.sh` reports ±0.5 ns/byte
+between consecutive runs). The micro-benchmark figures (`hsv_rainbow`,
+`tty_fg_rgb_buf`) measure the table-build path — that's now
+one-shot at startup rather than per-cluster (the M5 phase cache
+replaced both on the hot path with `_emit_phase_esc` ≈ 10 ns/call).

@@ -169,9 +169,9 @@ Run a closeout pass before tagging `X.Y.0` or `X.0.0`. Ship as the last patch of
 | `darshana` | ANSI color escape generation (24-bit / 256 / 16-color fallback paths) | Substrate. anuenue should NEVER emit raw `\x1b[...m` — always via darshana. |
 | `sakshi` | Errors / tracing / structured logging | Canonical per first-party-standards. No inline error types. |
 | `agnostik` | Shared Result / Error type shapes | Used wherever sakshi APIs surface |
-| Cyrius stdlib | string, fmt, alloc, io, vec, str, syscalls, assert, bench | Auto-resolved by `cyrius deps` |
+| Cyrius stdlib | string, fmt, alloc, io, vec, str, syscalls, assert, bench, args, flags, chrono | Auto-resolved by `cyrius deps`. `args` + `flags` added at M2; `chrono` at M4 for `sleep_ms` + `clock_now_ns`. |
 
-HSV→RGB math is inline (~10 lines, no `abaco` dep needed). Re-evaluate at v1.0 closeout if a second pipe-decorator wants it.
+HSV→RGB math is inline in `src/hsv.cyr` (~30 lines incl. phase-wrap + 6-sector branch table; no `abaco` dep needed). See [ADR 0002](docs/adr/0002-hsv-inline-not-abaco.md) for the design + post-v1.0 revisit triggers.
 
 ## CI / Release
 
@@ -180,7 +180,7 @@ HSV→RGB math is inline (~10 lines, no `abaco` dep needed). Re-evaluate at v1.0
 - **Tag filter**: release workflow triggers on `tags: ['[0-9]*']` — semver-only.
 - **Version-verify gate**: release asserts `VERSION == cyrius.cyml version == git tag` before building.
 - **Workflow layout**:
-  - `.github/workflows/ci.yml` — build, lint, test, bench
+  - `.github/workflows/ci.yml` — build, test, golden-check, animate-smoke, fuzz, version-consistency
   - `.github/workflows/release.yml` — version gate → CI gate → DCE build → artifacts
 
 ## Docs

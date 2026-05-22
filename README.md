@@ -3,33 +3,57 @@
 > **ānuenue** — Hawaiian for *rainbow*. Stdin → stdout rainbow-tint pipe filter.
 > The Cyrius-native `lolcat`.
 
-Pure pipe-filter: no file I/O, no network, no fork/exec. Tints each character along an HSV cycle, emits 24-bit ANSI via [`darshana`](https://github.com/MacCracken/darshana), and gets out of the way.
+Pure pipe-filter: no file I/O, no network, no fork/exec. Tints each grapheme cluster along an HSV cycle, emits ANSI escapes via [`darshana`](https://github.com/MacCracken/darshana), and gets out of the way.
 
 ## Quick Start
 
 ```sh
 cyrius deps                                  # resolve sibling deps (darshana, sakshi, agnostik)
-cyrius build src/main.cyr build/anuenue      # build
+cyrius build src/main.cyr build/anuenue      # build (add CYRIUS_DCE=1 for release)
 cyrius test                                  # [build].test + tests/*.tcyr
+sh scripts/golden-check.sh                   # determinism + NO_COLOR equivalence
+sh scripts/animate-smoke.sh                  # animation structural guard
+cyrius fuzz                                  # five harnesses, ~1.35M assertions
 ```
 
 ## Usage
 
 ```sh
-echo "AGNOS" | ./build/anuenue           # one-shot rainbow tint
-echo "AGNOS" | ./build/anuenue -s 100    # deterministic seed (testing / scripts)
-echo "AGNOS" | ./build/anuenue -p 13     # bigger phase step per character
-iam | ./build/anuenue                    # rainbow system-info splash
-bnrmr "AGNOS" | ./build/anuenue          # rainbow banner
-./build/anuenue --version                # anuenue 0.4.0
-./build/anuenue --help                   # full flag surface
+echo "AGNOS" | ./build/anuenue                 # one-shot rainbow tint
+echo "AGNOS" | ./build/anuenue -s 100          # deterministic seed (testing / scripts)
+echo "AGNOS" | ./build/anuenue -p 13           # bigger phase step per character
+echo "日本AGNOS" | ./build/anuenue             # UTF-8 grapheme-aware (one phase per glyph)
+iam | ./build/anuenue                          # rainbow system-info splash
+bnrmr "AGNOS" | ./build/anuenue                # rainbow banner
+cat poem.txt | ./build/anuenue -a              # animated (-d <s> / -S <speed>)
+NO_COLOR=1 echo "AGNOS" | ./build/anuenue      # byte-identical passthrough
+./build/anuenue --color=256                    # quantize to xterm 256-cube
+./build/anuenue --force-color | tee motd.ansi  # keep colour through a non-TTY pipe
+./build/anuenue --version                      # anuenue 1.0.0
+./build/anuenue --help                         # full flag surface
 ```
 
-**Flags shipped at v0.4.0**: `-h`/`--help`, `-V`/`--version`, `-p`/`--freq <N>` (phase step per cluster; default 7), `-s`/`--seed <N>` (starting hue phase — deterministic-output hook), `-F`/`--offset <N>` (additive phase offset, Ruby-lolcat compat).
+### Flags (v1.0 — frozen)
 
-**UTF-8 / grapheme behavior**: cycle advances per *cluster*, not per byte. CJK / combining diacritics / ZWJ emoji sequences / regional-indicator flag pairs all get one phase advance each. Invalid UTF-8 → graceful per-byte cycling (never panics).
+| Short | Long              | Arg      | Effect |
+|-------|-------------------|----------|--------|
+| `-h`  | `--help`          | —        | Usage to stderr, exit 0 |
+| `-V`  | `--version`       | —        | `anuenue X.Y.Z\n` to stdout, exit 0 |
+| `-p`  | `--freq <N>`      | int      | Phase step per cluster (default 7) |
+| `-s`  | `--seed <N>`      | int      | Starting hue phase (deterministic) |
+| `-F`  | `--offset <N>`    | int      | Additive phase offset (Ruby-lolcat compat) |
+| `-a`  | `--animate`       | —        | Buffer input, repaint with phase shift per frame |
+| `-d`  | `--duration <N>`  | int      | Animation duration in seconds (0 = until SIGINT) |
+| `-S`  | `--speed <N>`     | int      | Animation phase advance per frame (default 1) |
+| `-n`  | `--no-color`      | —        | Force MONO passthrough (byte-identical to `cat`) |
+| `-C`  | `--force-color`   | —        | Emit colour even when stdout isn't a TTY |
+| `-c`  | `--color <mode>`  | str      | `auto` / `24bit` / `256` / `16` / `none` |
 
-**Coming in v0.5.0 (M4)**: `-a` / `-d <duration>` / `-S <speed>` animation mode. See [`docs/development/roadmap.md`](docs/development/roadmap.md).
+**Colour-mode priority chain**: `--color` → `--no-color` → `NO_COLOR` env → stdout-not-TTY (unless `--force-color`) → `COLORTERM` → `TERM`.
+
+### UTF-8 / grapheme behavior
+
+Cycle advances per *cluster*, not per byte. CJK / combining diacritics / ZWJ emoji sequences / regional-indicator flag pairs all get one phase advance each. Invalid UTF-8 → graceful per-byte cycling (never panics, never over-reads). See [ADR 0003](docs/adr/0003-grapheme-cluster-cycling.md) for the practical-subset classifier design + the Hangul / Devanagari / tag-sequence trade-offs.
 
 ## Why a Cyrius-native lolcat?
 
@@ -39,17 +63,39 @@ It's also the founder of the **pipe-decorator family** in AGNOS userland — std
 
 ## Project Status
 
-**v0.4.0 — M3: UTF-8 Grapheme Awareness.** Pipe-purity proof (M1) + lolcat-equivalent flag surface (M2) + grapheme-cluster cycling (M3) all shipped. Next slot is **M4 — Animation Mode (v0.5.0)**. See [`docs/development/roadmap.md`](docs/development/roadmap.md) for the v1.0 plan and [`docs/development/state.md`](docs/development/state.md) for the live snapshot.
+**v1.0.0 — GA.** Public API contract frozen for the v1.x line. The flag surface above, exit codes, capability surface, and output shape are stable; sandhi bumps within v1.x update internal helpers without breaking the contract. See [`docs/development/roadmap.md`](docs/development/roadmap.md) for the v1.0 acceptance scorecard and the post-v1.0 plan, and [`docs/development/state.md`](docs/development/state.md) for the live snapshot.
+
+### Quality bar at v1.0.0
+
+- **245** unit assertions (`cyrius test`)
+- **10** golden fixtures + equivalence checks (`scripts/golden-check.sh`)
+- **18** animation structural assertions (`scripts/animate-smoke.sh`)
+- **1,354,580** fuzz assertions per run across 5 harnesses (`cyrius fuzz`)
+- **0** HIGH+ security audit findings open ([`docs/audit/2026-05-22-audit.md`](docs/audit/2026-05-22-audit.md))
+- **DCE binary 351,200 B** (~343 KB; cap = 512 KB)
+- **Perf**: 45–50 ns/byte ASCII no-LF (M5 acceptance ≤60 ns/byte)
+- **0** `cyrius lint` warnings
+
+### Dependencies (pinned for v1.x)
+
+| Dep | Tag | Role |
+|-----|-----|------|
+| [`darshana`](https://github.com/MacCracken/darshana) | 0.5.3 | ANSI escape primitives |
+| [`sakshi`](https://github.com/MacCracken/sakshi) | 2.2.5 | Errors / tracing (first-party-standards-required) |
+| [`agnostik`](https://github.com/MacCracken/agnostik) | 1.2.2 | Shared Result / Error shapes |
+| Cyrius toolchain | 6.0.1 | `cyrius.cyml [package].cyrius` |
 
 ## Documentation
 
-- [`CLAUDE.md`](CLAUDE.md) — durable rules for Claude Code working in this repo
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — milestones through v1.0
+- [`CLAUDE.md`](CLAUDE.md) — durable rules for working in this repo (Claude Code or human)
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — milestones M0 → v1.0; post-v1.0 plan
 - [`docs/development/state.md`](docs/development/state.md) — current state (volatile)
-- [`docs/adr/`](docs/adr/) — architecture decision records
-- [`docs/architecture/`](docs/architecture/) — non-obvious constraints
-- [`docs/guides/`](docs/guides/) — task-oriented how-tos
-- [`docs/examples/`](docs/examples/) — runnable examples
+- [`docs/adr/`](docs/adr/) — architecture decision records (`0001` pipe-purity, `0002` HSV-inline, `0003` grapheme-cluster cycling)
+- [`docs/guides/getting-started.md`](docs/guides/getting-started.md) — build / run / develop
+- [`docs/guides/integrating-anuenue.md`](docs/guides/integrating-anuenue.md) — downstream-consumer integration manual
+- [`docs/examples/`](docs/examples/) — eight runnable shell examples covering the full flag surface
+- [`docs/audit/`](docs/audit/) — security audit reports (v1.0 baseline: 2026-05-22)
+- [`docs/benchmarks.md`](docs/benchmarks.md) — per-byte overhead trend across releases
 - [`CHANGELOG.md`](CHANGELOG.md) — release log (Keep a Changelog format)
 
 ## Standards

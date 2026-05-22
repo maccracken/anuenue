@@ -35,17 +35,22 @@ sector 4: R=t,   G=0,   B=255
 sector 5: R=255, G=0,   B=255-t
 ```
 
-That's `src/filter.cyr:195` — six branches, integer ops only, no floats,
+That's `src/hsv.cyr:58` — six branches, integer ops only, no floats,
 no transcendentals. About 30 lines including the phase-wrap pre-step
 (`phase % ANUENUE_PHASE_MOD`) and the boilerplate Cyrius
-`store64`-to-out-buffer convention.
+`store64`-to-out-buffer convention. (Lived in `src/filter.cyr` from
+M1 through v0.8.0; pulled into its own file at v0.9.0 once the fuzz
+harness's `emit-phase-esc` target made it a second consumer.)
 
 ## Decision
 
-**Implement HSV→RGB inline in `src/filter.cyr` as `hsv_rainbow(phase,
-out_rgb)`.** No abaco dependency. The function stays in the same
-compilation unit as the filter loop that calls it (M1) and the phase-
-cache builder that calls it 1 530 times at startup (M5).
+**Implement HSV→RGB inline as `hsv_rainbow(phase, out_rgb)`.** No
+abaco dependency. The function originally lived in `src/filter.cyr`
+alongside the filter loop that calls it (M1) and the phase-cache
+builder that calls it 1 530 times at startup (M5); at v0.9.0 it
+moved into its own `src/hsv.cyr` once the fuzz harness gave it a
+second consumer (see Neutral consequences below for the split's
+history).
 
 The signature is the integer-only S=V=1 form:
 
@@ -75,7 +80,7 @@ The revisit trigger is documented below.
   startup, ~80 μs). Calling out to abaco would force a function
   boundary on the hot construction path. Once the cache is built, the
   per-cluster cost is a memcpy from a pre-formatted escape buffer
-  (`_emit_phase_esc` at `src/filter.cyr:156`) — abaco wouldn't help
+  (`_emit_phase_esc` at `src/filter.cyr:153`) — abaco wouldn't help
   here anyway.
 - **No floating point.** The S=V=1 rainbow lives entirely in integers
   in `[0, 255]`. Pulling abaco would introduce float-shaped APIs that
@@ -100,11 +105,14 @@ The revisit trigger is documented below.
 
 ### Neutral
 
-- The function lives in `src/filter.cyr` rather than its own
-  `src/hsv.cyr`. The M0 scaffold plan anticipated splitting it out;
-  M5 (perf pass) deferred the split because the phase cache wants to
-  live next to its consumer. Future minor that adds a second HSV
-  consumer outside `filter.cyr` is the right trigger for the split.
+- The function lives in `src/hsv.cyr` (extracted at v0.9.0). The M0
+  scaffold plan anticipated splitting it out; M1–M5 deferred while
+  there was only one consumer (the M5 phase-cache builder, itself in
+  `filter.cyr`). At v0.9.0 the fuzz harness's `emit-phase-esc` target
+  in `fuzz/emit-phase-esc.fcyr` became the second consumer and the
+  split landed. `main.cyr` / `filter.cyr` / `animate.cyr` /
+  `tests/anuenue.tcyr` / `tests/anuenue.bcyr` all include `src/hsv.cyr`
+  before `src/filter.cyr` since the filter references `ANUENUE_PHASE_MOD`.
 - M6 (colour-mode negotiation) added `_rgb_to_256` and `_rgb_to_16`
   quantisation in `src/color.cyr` (`_channel_to_6` + the xterm
   256-cube + the bright-16 palette). These are *adjacent* to
@@ -125,11 +133,12 @@ The revisit trigger is documented below.
   to — sandhi-bumping the toolchain rather than the abaco dep. Note
   for future readers: re-evaluate when the stdlib version pinned in
   `cyrius.cyml [package].cyrius` bumps and ships `color`.
-- **Split into `src/hsv.cyr` as its own compilation unit.** Deferred,
-  not rejected. The split makes sense the moment a second consumer
-  (outside `filter.cyr` and the M5 phase cache) wants `hsv_rainbow`.
-  Tracked in [`docs/development/state.md`](../development/state.md) §
-  Source.
+- **Split into `src/hsv.cyr` as its own compilation unit.** Shipped
+  at v0.9.0 — the M0 scaffold plan's anticipated split finally
+  landed once the fuzz harness's `emit-phase-esc` target became the
+  second consumer (alongside the M5 phase-cache builder in
+  `filter.cyr`). `main.cyr` includes `hsv.cyr` before `filter.cyr`
+  so the latter can reference `ANUENUE_PHASE_MOD`.
 - **Floating-point HSV (`H` in `[0, 360)`, `S, V` in `[0, 1]`).**
   Rejected. The 6-sector integer form at S=V=1 is exact and matches
   the rainbow brand. Floats would introduce rounding decisions, would

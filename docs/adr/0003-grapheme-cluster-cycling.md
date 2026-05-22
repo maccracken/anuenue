@@ -58,7 +58,7 @@ That leaves full UAX #29 vs the practical subset.
 `cp_is_regional_indicator(cp)` (line 432), backed by a 21-entry sorted
 `(lo, hi)` range table searched in O(log n) via the M5 perf pass.
 
-The covered ranges (see `_cp_ext_init`, `src/filter.cyr:362`):
+The covered ranges (see `_cp_ext_init`, `src/filter.cyr:295`):
 
 | Range                 | Codepoints       | Source            |
 |-----------------------|------------------|-------------------|
@@ -195,5 +195,5 @@ common emoji ZWJ-sequence shape.
   [`CHANGELOG.md`](../../CHANGELOG.md) and the carry-forward in
   [`docs/development/state.md`](../development/state.md).
 - The M5 perf pass that flattened the original linear chain into the
-  sorted-table binary search lives in `src/filter.cyr:362`
-  (`_cp_ext_init`) and `src/filter.cyr:398` (`cp_is_extending`).
+  sorted-table binary search lives in `src/filter.cyr:295`
+  (`_cp_ext_init`) and `src/filter.cyr:331` (`cp_is_extending`).
