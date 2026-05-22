@@ -16,13 +16,13 @@ Tagged when **all** of the following hold:
 
 - [ ] **Public CLI surface frozen** — every flag documented, every flag exercised in tests, every flag behavior matches docs *(M2 shipped the surface at v0.3.0; freeze happens at M7)*
 - [x] **UTF-8 correct by default** — grapheme-cluster aware cycling (Ruby lolcat got this wrong; AGNOS ships it right) *— shipped at M3 / v0.4.0; practical-subset classifier, ADR 0003 (M7) records the trade vs full UAX #29*
-- [x] **TTY-aware** — no ANSI when stdout isn't a terminal; sensible behavior with `NO_COLOR` env *— shipped at M6 / v0.7.0; isatty via `_isatty_compat` (darshana 0.5.3 pending), NO_COLOR / `--no-color` / stdout-not-TTY all route to MONO*
+- [x] **TTY-aware** — no ANSI when stdout isn't a terminal; sensible behavior with `NO_COLOR` env *— shipped at M6 / v0.7.0; isatty via darshana 0.5.3's `tty_isatty` (sandhi closeout v0.7.1); NO_COLOR / `--no-color` / stdout-not-TTY all route to MONO*
 - [x] **Color-mode negotiation** — 24-bit / 256-color / 16-color / monochrome fallback per `TERM` + `COLORTERM` *— shipped at M6 / v0.7.0; four-mode taxonomy with priority chain, override via `--color <mode>`*
 - [x] **Animation parity with `lolcat -a`** — cursor positioning, frame timing, signal-safe (SIGINT restores cursor) *— shipped at M4 / v0.5.0; non-blocking signalfd probe between frames, `tty_cursor_up` re-anchor, 16 ms frame interval*
 - [x] **Per-character overhead measured** — benchmark showing the cost vs `cat`, tracked in `docs/benchmarks.md` *— M5 (v0.6.0) shipped scripts/perf-bench.sh as the ratchet; ASCII no-LF at 47 ns/byte, below the v0.3.0 53 ns/byte floor*
 - [ ] **Dogfooded** in real AGNOS pipelines (`iam | anuenue` MOTD; `bnrmr | anuenue` banners) for at least one minor-cycle window *(blocked on first consumer wiring, anticipated post-M6)*
 - [ ] **Security audit pass** — `docs/audit/YYYY-MM-DD-audit.md` clean; specific checks for stdin-bytes-as-untrusted and buffer-bounds on the line buffer *(M8)*
-- [x] **CHANGELOG complete** from v0.1.0 onward *— v0.1.0 / v0.2.0 / v0.3.0 / v0.4.0 all sectioned; maintained at every cut*
+- [x] **CHANGELOG complete** from v0.1.0 onward *— all eight cuts (v0.1.0 → v0.7.1) sectioned; maintained at every cut*
 - [ ] **Downstream gate**: at least one consumer green (likely `agnoshi` MOTD pipeline or `iam`'s default chain) *(see Dogfooded above — same blocker)*
 
 ## Dependency Map
@@ -31,7 +31,7 @@ anuenue is small enough that the dep map is the *core* of the roadmap — each m
 
 | Dep | Used At | Provides | Pin Strategy |
 |-----|---------|----------|--------------|
-| **darshana** | v0.2.0+ | ANSI 24-bit escape generation (`tty_fg_rgb_buf` / `tty_sgr_reset_buf`); cursor positioning (`tty_cursor_up` / `_hide` / `_show` at M4); color-mode capability probing (M6) | Track latest stable; bump on sandhi at each minor close per [feedback_dep_lockin_sandhi_unlock](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_dep_lockin_sandhi_unlock.md). Currently pinned to 0.5.2 (M4 relative-cursor unlock). |
+| **darshana** | v0.2.0+ | ANSI 24-bit escape generation (`tty_fg_rgb_buf` / `tty_sgr_reset_buf`); relative cursor positioning (`tty_cursor_up` / `_down` at 0.5.2); `tty_isatty` + `tty_sgr_buf` + `tty_fg_256_buf` at 0.5.3 | Track latest stable; bump on sandhi at each minor close per [feedback_dep_lockin_sandhi_unlock](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_dep_lockin_sandhi_unlock.md). Currently pinned to **0.5.3** (sandhi closeout v0.7.1). |
 | **sakshi** | v0.1.0+ (required by standards) | Error type, tracing, structured logging | Tag-pinned; bump on consumer-need or sandhi. Currently 2.2.5. |
 | **agnostik** | v0.1.0+ | Shared Result / Error shapes | Tag-pinned. Currently 1.2.2. |
 | **Cyrius stdlib** | all | string, fmt, alloc, io, vec, str, syscalls, assert, bench, args, flags (M2+) | Toolchain pin (`cyrius.cyml [package].cyrius`). Currently 6.0.1. |
@@ -62,246 +62,21 @@ closeout) → v1.0.0 (tag on user signal).
 
 ## Milestones
 
-### M0 — Scaffold (v0.1.0) — ✅ shipped 2026-05-21
+### Shipped — M0 through M6 + sandhi closeout
 
-- `cyrius init anuenue` scaffold landed (cyrius 6.0.1)
-- Deps wired: darshana 0.5.0, sakshi 2.2.5, agnostik 1.2.2
-- Doc tree per [first-party-documentation.md](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/first-party-documentation.md)
-- CLAUDE.md filled from example template; roadmap (this file); state.md initial snapshot
-- Build path verified — `cyrius deps && cyrius build` produces a runnable binary
-- No filter logic yet; `src/main.cyr` is the scaffold hello-world
+Full per-cut narratives live in [`CHANGELOG.md`](../../CHANGELOG.md);
+this table is just the index.
 
-**Acceptance**: `cyrius build` succeeds, `cyrius test` passes, README is the AGNOS-style first impression.
-
-### M1 — Minimum Viable Filter (v0.2.0) — ✅ shipped 2026-05-21
-
-The pipe-purity proof: stdin → stdout, byte-level cycling, 24-bit ANSI via darshana. No flags. No animation. No UTF-8 cluster awareness. Just the core loop.
-
-Shipped surface:
-
-- `src/filter.cyr` — `hsv_rainbow(phase, out_rgb)` (integer 6-sector geometry over a 1530-unit phase space) + `anuenue_filter()` (stdin→stdout loop with LF-flush + force-flush). `src/main.cyr` is the entrypoint shell.
-- Emits via darshana 0.5.1's new `tty_fg_rgb_buf` + `tty_sgr_reset_buf` — composed into a 32KB line buffer for one write(2) per line; force-flush when next-character worst-case would exceed the 22-byte reserve.
-- 47 assertions across 6 groups in `tests/anuenue.tcyr`; first micro-benchmarks in `tests/anuenue.bcyr` (hsv_rainbow ≈8 ns/call, tty_fg_rgb_buf ≈45 ns/call); end-to-end baseline in `docs/benchmarks.md` (~53 ns/byte over cat, 17.4× output expansion).
-- Pipe-purity verified: capability surface is read(0) + write(1) + brk(12) + exit(60). No open, connect, fork, exec, signal, ioctl.
-
-**Dep gate**: darshana ANSI 24-bit fg path — **delivered at darshana 0.5.1** (anuenue was the consumer asking; pre-0.5.1 darshana shipped only 8/16 named SGR colors). Sandhi-unlock pattern: anuenue's M1 drove darshana's `tty_fg_rgb` / `tty_bg_rgb` / `_buf` variants into existence.
-
-**Acceptance** (all green): `echo "AGNOS" | ./build/anuenue` renders rainbow ASCII; `printf 'X%.0s' {1..100000} | ./build/anuenue > /dev/null` exits 0 with no OOM; baseline bench captured.
-
-### M2 — Flag Surface (v0.3.0) — ✅ shipped 2026-05-21
-
-Mirror lolcat's flag surface, AGNOS-flavored:
-
-- `-s <seed>` — color seed (deterministic output for tests). Writes starting hue phase.
-- `-p <freq>` — palette frequency (controls phase advance per character). Default 7.
-- `-h` / `--help` — usage. Printed to stderr per POSIX; pipe-purity unaffected.
-- `-V` / `--version` — version. Reads `_VERSION_STR_ANUENUE` from auto-generated `src/version_str.cyr` (cyim drift-prevention pattern); CI's Version consistency step asserts the literal vs `VERSION` file.
-- `-F <offset>` — phase offset start (Ruby lolcat compat). Additive to `-s`: `PHASE_START = seed + offset`.
-
-**Parser**: settled on `lib/flags.cyr` (AGNOS stdlib) over the
-roadmap-original "lightweight inline" — the stdlib parser is what
-every toolchain binary and consumer uses; adopting stdlib doesn't
-trip the "don't add a flag-parsing lib" rule (which was about
-sibling deps, not stdlib). Capability-surface delta: `args_init()`
-opens `/proc/self/cmdline` once at startup (open(2) + read + close(3)).
-
-**Acceptance** (all green): every flag exercised in `tests/anuenue.tcyr` (27 new assertions across 7 groups); deterministic-seed test passes via `tests/golden/agnos-rainbow-s100.out` + `scripts/golden-check.sh` (CI-wired); `--help` output stable and stderr-only.
-
-### M3 — UTF-8 Grapheme Awareness (v0.4.0) — ✅ shipped 2026-05-21
-
-Cycle by grapheme cluster, not byte. Multi-byte codepoints (CJK / combining diacritics / ZWJ-joined emoji / regional-indicator flag pairs) get one phase advance, not N. ASCII fast-path stays byte-identical (v0.3.0 `-s 100` golden remains green).
-
-Shipped surface:
-
-- **UTF-8 primitives in `src/filter.cyr`** — `utf8_seq_len()` (1/2/3/4-byte detection, 0 on truncation = chunk-boundary carry signal, 1 on invalid = graceful degradation); `utf8_decode()` (codepoint assembly); `cp_is_extending()` (practical-subset combining-mark classifier — ~18 ranges covering Latin / Cyrillic / Hebrew / Arabic combiners + ZWJ + VS + half marks + math zone + VS supplement); `cp_is_regional_indicator()` (flag-pair recognition).
-- **Cluster state machine** in `anuenue_filter()` — three latches: `saw_any` (suppress pre-advance on the first cluster), `prev_was_zwj` (codepoint after ZWJ joins the cluster), `prev_unpaired_ri` (pair regional indicators into flag emoji).
-- **Chunk-boundary carry** — multi-byte sequences straddling the 4 096-byte read boundary are split correctly; partial bytes carry into the next read. EOF with carry → graceful per-byte cycling.
-- **30 new tcyr assertions** across 5 groups; **3 new golden fixtures** (`cjk-mixed-s0.out`, `combining-s0.out`, `zwj-flag-s0.out`); `ANUENUE_FLUSH_RESERVE` bumped 22 → 32 for 4-byte codepoint worst-case envelope.
-
-**Dep gate resolved**: vyakarana evaluated and rejected (wrong domain — source-code tokenizer, not Unicode DB). Inline practical-subset classifier shipped instead. ADR 0003 (planned M7) will record the trade vs full UAX #29.
-
-**Practical-subset boundaries**: Hangul L/V/T composition and some Brahmic spacing-mark sequences misclassify as advancing (errs on "more rainbow, not less"). Acceptable trade for the shipped scope; M6 / M7 may revisit if a real-world corpus reports drift.
-
-### M4 — Animation Mode (v0.5.0) — ✅ shipped 2026-05-22
-
-`-a` (animate) + `-d <secs>` (default 5; `0` = until SIGINT) +
-`-S <speed>` (default 1; phase advance per frame) — lolcat-equivalent
-animation experience.
-
-Shipped surface:
-
-- **`src/animate.cyr`** — new ~270-line module. Buffers stdin once
-  (64 KB ceiling), pre-tags grapheme clusters via the M3 state
-  machine into an i64-per-cluster table (8 192-cluster ceiling +
-  sentinel slot holding total bytes), then loops a render-sleep-
-  cursor_up sequence at ~60 fps (16 ms frame interval). Phase
-  advances by `-S` units per frame to scroll the rainbow through
-  the buffered block.
-- **Cursor re-anchor**: `darshana::tty_cursor_up(n)` (sandhi-bumped
-  0.5.1 → 0.5.2 for this milestone — anuenue is the consumer
-  asking, darshana exposed the relative-cursor primitive, anuenue's
-  pin advances to consume it). Frame loop counts LF clusters once
-  at pre-tag time; `tty_cursor_up(rows)` re-anchors before each
-  re-render. No-trailing-LF inputs get a CR emitted at frame tail
-  so the cursor lands at column 1 of the partial-line row.
-- **SIGINT / SIGTERM / SIGHUP handler**: non-blocking signalfd
-  (SFD_NONBLOCK = 2048) opened at startup, with sigprocmask
-  queuing the signals on the fd instead of killing the process.
-  Frame loop probes the fd between sleeps; any pending signal
-  drops the loop into the clean-exit cleanup (cursor show + SGR
-  reset + final LF on no-trailing-LF inputs). Bypasses
-  `darshana::tty_open_signalfd` (which creates a blocking fd for
-  epoll-driven consumers) — non-blocking is the right shape for
-  anuenue's sleep_ms-driven cadence.
-- **Frame timing**: `chrono::sleep_ms(16)` between frames (16 ms
-  → ~60 fps). Deadline math via `chrono::clock_now_ns()` —
-  monotonic clock, immune to wall-clock adjustments. Stdlib
-  `chrono` added to `[deps].stdlib`.
-- **42 new tcyr assertions across 9 groups** in
-  `tests/anuenue.tcyr`: M4 constants sanity (SFD_NONBLOCK =
-  2048, defaults positive, frame interval ≤33 ms); `_pretag_clusters`
-  over ASCII / combining diacritic / CJK / truncated UTF-8 /
-  overflow cap; `_count_lf_clusters`; `_input_ends_with_lf`; flag
-  parsing for `-a` alone, `-a -d N -S M`, and `--animate
-  --duration=0`.
-- **`scripts/animate-smoke.sh`** — structural guard. Animation
-  can't have a byte-identical golden (frame count varies with
-  host load), so the script asserts the contract instead: exit
-  0 on duration-elapsed AND on SIGINT, cursor-hide / cursor-show
-  framing, ≥1 cursor-up emitted. Wired into CI as **Animation
-  smoke (M4)**.
-
-**Pipe-purity deviation** (carry-forward to ADR 0001): animation
-mode buffers up to 64 KB of stdin, deliberately deviating from
-the M1/M2/M3 "no buffering beyond a line" rule. Bounded by the
-input ceiling and the cluster-table ceiling.
-
-**Capability surface delta** (vs M3): `rt_sigprocmask(14)` (block
-exit signals so they queue), `signalfd4(289)` (non-blocking probe
-fd), `nanosleep(35)` (frame interval via chrono.sleep_ms). M8's
-audit will fold these into the v1.0-frozen capability set.
-
-**Dep gate**: darshana relative-cursor primitives — **delivered
-at darshana 0.5.2** (`tty_cursor_up(n)` / `tty_cursor_down(n)`).
-Cyrius stdlib's `chrono` provides nanosleep + monotonic clock;
-`syscalls_linux_common` exposes `sys_sigprocmask` + `sys_signalfd`.
-
-**Acceptance** (all green): `echo "AGNOS" | ./build/anuenue -a
--d 1` renders ~60 frames, exits 0, leaves cursor visible; SIGINT
-during a 60-s animation exits 0 with cursor-show emitted; all
-four M3 goldens still byte-identical (filter path unaffected).
-
-### M5 — Performance Pass (v0.6.0) — ✅ shipped 2026-05-22
-
-Three layered optimisations recovered the M3 ASCII regression and
-overshot the v0.3.0 floor on the canonical ASCII no-LF corpus.
-
-Shipped surface:
-
-- **ASCII short-circuit** in `anuenue_filter`'s inner walk AND
-  `_pretag_clusters` — `b < 0x80` skips `utf8_seq_len` +
-  `utf8_decode` + `cp_is_extending` + `cp_is_regional_indicator`
-  on every ASCII byte (by construction it can't be combining or
-  RI or multi-byte). The ZWJ-then-ASCII edge case stays correct
-  via the `prev_was_zwj` latch the fast path honours.
-- **Binary-searched `cp_is_extending` LUT** — sorted `[lo, hi]`
-  pair table (21 entries) replacing the v0.4.0 linear chain;
-  cheap-reject branches for `cp < 0x0300` and `cp > 0xE01EF`
-  cover most-of-Unicode without entering the search.
-- **Phase-cached escape buffer** — 1 530-entry table indexed by
-  `phase % ANUENUE_PHASE_MOD` holding pre-formatted
-  `\x1b[38;2;R;G;Bm` escapes. New `_phase_esc_init` populates
-  it once at first filter/animate entry; new `_emit_phase_esc`
-  is the per-cluster hot-path emitter. Replaces `hsv_rainbow +
-  tty_fg_rgb_buf` (~53 ns/call) with one length-prefixed memcpy
-  (~10 ns/call). 32-byte stride per entry matches a cache-line
-  fill. Animation mode's `_render_frame` benefits equally.
-- **`scripts/perf-bench.sh`** — scriptizes the end-to-end ASCII
-  per-byte measurement docs/benchmarks.md kept describing
-  manually. Generates ASCII no-LF + ASCII w/ LFs + UTF-8 mixed
-  corpora at ~1.4 MB each, runs `cat fixture > /dev/null` and
-  `anuenue < fixture > /dev/null` N times each, reports the
-  median ns/byte. M5 ratchet from here on.
-- **26 new assertions across 1 group** in `tests/anuenue.tcyr`:
-  `_phase_esc_init` idempotency + per-entry byte-identical
-  round-trip against the runtime path across 8 canonical phases
-  + phase normalization (negative + `>MOD`) + table-layout
-  invariants (32-byte stride, 13–19-byte entry length envelope).
-
-**Bench results** (1.4 MB corpora, median of 7 runs):
-
-| Corpus           | v0.5.0  | v0.6.0  | Δ       |
-|------------------|---------|---------|---------|
-| ascii (no LF)    | 91.6 ns | 47.0 ns | −48.7%  |
-| ascii (w/ LFs)   | 95.0 ns | 51.0 ns | −46.3%  |
-| utf8 mixed       | 66.3 ns | 43.0 ns | −35.1%  |
-
-ASCII no-LF now FASTER than the v0.3.0 53 ns/byte floor. UTF-8
-mixed beats ASCII-at-v0.3.0 too (cluster work amortises over
-multi-byte payloads + escape pre-computation skips digit encoding).
-
-**Binary** — DCE size 334 120 → **335 160 B (+1 040)**. The 48 KB
-phase-cache table lives on the heap (one alloc at first filter/
-animate entry); doesn't bloat the binary. ~15 KB headroom against
-the M5 acceptance cap of 350 KB.
-
-**Acceptance** (all green): ASCII per-byte ≤ 60 ns/byte (47.0,
-−21% under the target); UTF-8 unaffected or better (43.0 vs 66.3,
-−35%); binary < 350 KB DCE (335 KB).
-
-### M6 — Color-Mode Negotiation (v0.7.0) — ✅ shipped 2026-05-22
-
-Four-mode taxonomy with priority chain — anuenue stops assuming
-24-bit truecolor and adapts to whatever the terminal supports.
-
-Shipped surface:
-
-- **`src/color.cyr`** — new ~200-line module:
-  - Mode enum: `ANUENUE_COLOR_MONO` / `_16` / `_256` / `_TRUE`.
-  - `_color_override_from_str` / `_color_mode_from_override` —
-    string-flag parsing for `--color <auto|24bit|truecolor|256|
-    16|none|off|never>` + enum mapping.
-  - `_channel_to_6` / `_rgb_to_256` — xterm 6×6×6 cube quantization
-    using midpoint thresholds `{48, 115, 155, 195, 235}`. Skips
-    the 24-step grayscale ramp because the HSV rainbow never hits
-    R == G == B at non-vertex phases.
-  - `_rgb_to_16` — maps `(R≥128, G≥128, B≥128)` bright-flag triple
-    to one of `{91, 92, 93, 94, 95, 96}` for the six rainbow
-    sectors; white `97` defensive fallback.
-  - `anuenue_detect_color_mode(no_color, force_color, override)`
-    — combines all priority rules: explicit override > --no-color
-    > NO_COLOR env > stdout-not-TTY (unless --force-color) >
-    COLORTERM truecolor/24bit > TERM `-direct` or `256color` >
-    16-color fallback.
-  - `anuenue_passthrough()` — MONO bypass; tight read(0)/write(1)
-    loop matching `cat`'s capability surface.
-- **Three new flags in `src/main.cyr`**: `-n` / `--no-color`,
-  `-C` / `--force-color`, `-c` / `--color <mode>`. Test hook
-  (golden suite uses `--color=24bit` to pin a mode regardless of
-  the runner's TTY state).
-- **`_phase_esc_init` mode-aware** in `src/filter.cyr` — branches
-  on `ANUENUE_COLOR_MODE` to populate the 1 530-entry table with
-  per-mode escape bytes. Hot-path emit unchanged.
-- **Two new golden fixtures**: `agnos-rainbow-256-s100.out`
-  (160 B), `agnos-rainbow-16-s100.out` (82 B). Plus three
-  MONO-equivalence checks in `golden-check.sh`.
-- **69 new tcyr assertions across 6 groups**: mode enum + alias
-  parser + `_channel_to_6` bucket boundaries + `_rgb_to_256`
-  canonical hues + `_rgb_to_16` bright-palette quantization +
-  `_fg_256_buf_compat` / `_sgr_buf_compat` escape framing +
-  bounds rejection.
-
-**Sandhi pending**: darshana 0.5.3 (third turn) ships
-`tty_isatty(fd)` + `tty_sgr_buf(buf, pos, code)` +
-`tty_fg_256_buf(buf, pos, n)`. anuenue M6 ships with three
-stand-ins marked `TODO(sandhi 0.5.3)` — mechanical swap when
-0.5.3 lands; recovers ~1-2 KB binary.
-
-**Acceptance** (all green): tests cover all four modes; `NO_COLOR=1
-echo X | anuenue` is byte-identical to `echo X`.
-
-**Binary**: 335 160 → **349 832 B** (+14 672 B). 168 B under the
-M5 cap. M7 closeout should raise the cap to 512 KB.
+| Cut      | Slot                            | Headline                                                                                                                |
+|----------|---------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| v0.1.0   | M0 — Scaffold                   | `cyrius init anuenue` scaffold; doc tree; deps pinned (darshana 0.5.0, sakshi 2.2.5, agnostik 1.2.2).                    |
+| v0.2.0   | M1 — Minimum Viable Filter      | stdin → stdout per-byte 24-bit rainbow via darshana 0.5.1's `tty_fg_rgb_buf`. Pipe-pure: read+write+brk+exit only.       |
+| v0.3.0   | M2 — Flag Surface               | `-h` / `-V` / `-p` / `-s` / `-F` via `lib/flags.cyr`; deterministic-seed golden harness.                                 |
+| v0.4.0   | M3 — UTF-8 Grapheme Awareness   | Cycle by cluster, not byte. Practical-subset extending-cp classifier + ZWJ + RI latches + chunk-boundary carry.         |
+| v0.5.0   | M4 — Animation Mode             | `-a` / `-d` / `-S`; cluster pre-tag + 16 ms frame loop + non-blocking signalfd + darshana 0.5.2 `tty_cursor_up`.        |
+| v0.6.0   | M5 — Performance Pass           | ASCII short-circuit + binary-searched `cp_is_extending` LUT + 1 530-entry phase-cached escape buffer. 91.6 → 47.0 ns/B. |
+| v0.7.0   | M6 — Color-Mode Negotiation     | TRUECOLOR / 256 / 16 / MONO with priority chain; `--no-color` / `--force-color` / `--color <mode>` flags.               |
+| v0.7.1   | Sandhi closeout                 | darshana 0.5.3 swap (`tty_isatty` / `tty_sgr_buf` / `tty_fg_256_buf`); stand-ins removed; DCE cap raised 350 → 512 KB.   |
 
 ### M7 — Public-Surface Freeze + Guide Docs (v0.8.0) — *next*
 
