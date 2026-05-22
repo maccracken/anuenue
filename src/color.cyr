@@ -20,12 +20,11 @@
 #   6. `TERM` contains "256color" or "-direct"            → COLOR_256 / TRUECOLOR
 #   7. fallback on a TTY                                  → COLOR_16
 #
-# Sandhi pending: darshana 0.5.3 will ship `tty_isatty(fd)`,
-# `tty_sgr_buf(buf, pos, code)`, `tty_fg_256_buf(buf, pos, n)` per
-# the M6 dep spec. Until that lands the three stand-ins below
-# (`_isatty_compat`, `_sgr_buf_compat`, `_fg_256_buf_compat`)
-# implement those bodies inline. When 0.5.3 lands: bump pin, delete
-# stand-ins, replace call sites — mechanical sed substitution.
+# Darshana 0.5.3 ships `tty_isatty(fd)`, `tty_sgr_buf(buf, pos, code)`,
+# `tty_fg_256_buf(buf, pos, n)`. Call sites below use those directly;
+# the v0.7.0-era stand-ins (`_isatty_compat` / `_sgr_buf_compat` /
+# `_fg_256_buf_compat`) were removed in this slot alongside the
+# darshana 0.5.2 → 0.5.3 pin bump.
 
 # ---- Color mode enum ----------------------------------------------
 var ANUENUE_COLOR_MONO  = 0;
@@ -74,56 +73,6 @@ fn _color_mode_from_override(ovr): i64 {
     if (ovr == ANUENUE_COLOR_OVERRIDE_16)   { return ANUENUE_COLOR_16; }
     if (ovr == ANUENUE_COLOR_OVERRIDE_NONE) { return ANUENUE_COLOR_MONO; }
     return ANUENUE_COLOR_TRUE;
-}
-
-# ---- compat stand-ins (DELETE when darshana 0.5.3 ships) ----------
-# TODO(sandhi 0.5.3): replace _isatty_compat with darshana::tty_isatty.
-# Implementation note: TIOCGWINSZ succeeds on TTYs, ENOTTY otherwise —
-# same property libc's isatty(3) tests on Linux. Constant 0x5413
-# already exposed in darshana 0.5.2 as TIOCGWINSZ.
-fn _isatty_compat(fd): i64 {
-    var ws[8];
-    var rc = syscall(SYS_IOCTL, fd, TIOCGWINSZ, &ws);
-    if (rc < 0) { return 0; }
-    return 1;
-}
-
-# TODO(sandhi 0.5.3): replace _fg_256_buf_compat with
-# darshana::tty_fg_256_buf. Writes "\x1b[38;5;Nm" at buf+pos for
-# N in [0, 255]; returns new pos, -1 out-of-range.
-fn _fg_256_buf_compat(buf, pos, n): i64 {
-    if (n < 0)   { return 0 - 1; }
-    if (n > 255) { return 0 - 1; }
-    store8(buf + pos + 0, 0x1b);  # ESC
-    store8(buf + pos + 1, 0x5b);  # '['
-    store8(buf + pos + 2, 0x33);  # '3'
-    store8(buf + pos + 3, 0x38);  # '8'
-    store8(buf + pos + 4, 0x3b);  # ';'
-    store8(buf + pos + 5, 0x35);  # '5'
-    store8(buf + pos + 6, 0x3b);  # ';'
-    pos = pos + 7;
-    # darshana's _ansi_emit_u8 returns the new pos (not digit count) —
-    # match its tty_fg_rgb_buf calling convention.
-    pos = _ansi_emit_u8(buf, pos, n);
-    store8(buf + pos, 0x6d);      # 'm'
-    return pos + 1;
-}
-
-# TODO(sandhi 0.5.3): replace _sgr_buf_compat with
-# darshana::tty_sgr_buf. Writes "\x1b[<code>m" at buf+pos for
-# code in [0, 999]; returns new pos, -1 out-of-range. The 0..999
-# bound matches darshana's existing tty_sgr.
-fn _sgr_buf_compat(buf, pos, code): i64 {
-    if (code < 0)   { return 0 - 1; }
-    if (code > 999) { return 0 - 1; }
-    store8(buf + pos + 0, 0x1b);
-    store8(buf + pos + 1, 0x5b);
-    pos = pos + 2;
-    # tty_itoa returns the digit count written; advance pos by it.
-    # (Different convention from _ansi_emit_u8 which returns new pos.)
-    pos = pos + tty_itoa(buf, pos, code);
-    store8(buf + pos, 0x6d);
-    return pos + 1;
 }
 
 # ---- RGB → 256-color cube quantization ----------------------------
@@ -209,7 +158,7 @@ fn anuenue_detect_color_mode(no_color_flag, force_color, override): i64 {
     # 4. stdout not a TTY (and not --force-color) → MONO so
     #    `anuenue > file` produces clean text.
     if (force_color == 0) {
-        if (_isatty_compat(STDOUT) == 0) { return ANUENUE_COLOR_MONO; }
+        if (tty_isatty(STDOUT) == 0) { return ANUENUE_COLOR_MONO; }
     }
     # 5. COLORTERM signals truecolor support explicitly.
     var ct = getenv("COLORTERM");

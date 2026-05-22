@@ -515,36 +515,38 @@ fn main(): i64 {
     # white fallback is the safe default rather than emitting nothing).
     assert_eq(_rgb_to_16(50,  50,  50),  97, "(50,50,50) all-dim → white fallback");
 
-    test_group("M6 color — _fg_256_buf_compat escape framing");
+    test_group("M6 color — tty_fg_256_buf escape framing (darshana 0.5.3)");
     # \x1b[38;5;Nm shape: 7-byte prefix + 1-3 digits + 'm'.
+    # Migrated from the v0.7.0-era `_fg_256_buf_compat` stand-in.
     var c256buf[16];
-    assert_eq(_fg_256_buf_compat(&c256buf, 0,   0), 9,  "N=0 → 9 bytes total");
+    assert_eq(tty_fg_256_buf(&c256buf, 0,   0), 9,  "N=0 → 9 bytes total");
     assert_eq(load8(&c256buf + 0), 0x1b, "byte 0 = ESC");
     assert_eq(load8(&c256buf + 1), 0x5b, "byte 1 = '['");
     assert_eq(load8(&c256buf + 5), 0x35, "byte 5 = '5' (palette selector)");
     assert_eq(load8(&c256buf + 7), 0x30, "byte 7 = '0' (N=0 single digit)");
     assert_eq(load8(&c256buf + 8), 0x6d, "byte 8 = 'm' (terminator)");
-    assert_eq(_fg_256_buf_compat(&c256buf, 0, 255), 11, "N=255 → 11 bytes total");
+    assert_eq(tty_fg_256_buf(&c256buf, 0, 255), 11, "N=255 → 11 bytes total");
     assert_eq(load8(&c256buf + 7),  0x32, "byte 7 = '2'");
     assert_eq(load8(&c256buf + 8),  0x35, "byte 8 = '5'");
     assert_eq(load8(&c256buf + 9),  0x35, "byte 9 = '5'");
     assert_eq(load8(&c256buf + 10), 0x6d, "byte 10 = 'm'");
     # Bounds rejection
-    assert_eq(_fg_256_buf_compat(&c256buf, 0, 0 - 1), 0 - 1, "N=-1 rejected");
-    assert_eq(_fg_256_buf_compat(&c256buf, 0, 256),   0 - 1, "N=256 rejected");
+    assert_eq(tty_fg_256_buf(&c256buf, 0, 0 - 1), 0 - 1, "N=-1 rejected");
+    assert_eq(tty_fg_256_buf(&c256buf, 0, 256),   0 - 1, "N=256 rejected");
 
-    test_group("M6 color — _sgr_buf_compat escape framing");
+    test_group("M6 color — tty_sgr_buf escape framing (darshana 0.5.3)");
     # \x1b[<code>m shape: 2-byte prefix + 1-3 digits + 'm'.
+    # Migrated from the v0.7.0-era `_sgr_buf_compat` stand-in.
     var sgrbuf[16];
-    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 91), 5, "code=91 → 5 bytes total");
+    assert_eq(tty_sgr_buf(&sgrbuf, 0, 91), 5, "code=91 → 5 bytes total");
     assert_eq(load8(&sgrbuf + 0), 0x1b, "byte 0 = ESC");
     assert_eq(load8(&sgrbuf + 2), 0x39, "byte 2 = '9'");
     assert_eq(load8(&sgrbuf + 3), 0x31, "byte 3 = '1'");
     assert_eq(load8(&sgrbuf + 4), 0x6d, "byte 4 = 'm'");
-    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 0),  4,  "code=0 (reset) → 4 bytes");
-    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 999), 6, "code=999 → 6 bytes");
-    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 0 - 1), 0 - 1, "code=-1 rejected");
-    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 1000),  0 - 1, "code=1000 rejected");
+    assert_eq(tty_sgr_buf(&sgrbuf, 0, 0),  4,  "code=0 (reset) → 4 bytes");
+    assert_eq(tty_sgr_buf(&sgrbuf, 0, 999), 6, "code=999 → 6 bytes");
+    assert_eq(tty_sgr_buf(&sgrbuf, 0, 0 - 1), 0 - 1, "code=-1 rejected");
+    assert_eq(tty_sgr_buf(&sgrbuf, 0, 1000),  0 - 1, "code=1000 rejected");
 
     # ---- v0.5.0 — M4 animation surface ------------------------------
     # Cluster pre-tagging and helper math. The frame loop, signalfd,

@@ -4,6 +4,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`[deps.darshana]` pinned 0.5.2 → 0.5.3** alongside the
+  removal of the M6-era inline stand-ins. Darshana 0.5.3 ships
+  `tty_isatty(fd)`, `tty_sgr_buf(buf, pos, code)`, and
+  `tty_fg_256_buf(buf, pos, n)` per the sandhi-coordination
+  proposal at
+  [`sandhi/docs/proposals/2026-05-22-darshana-color-mode-helpers.md`](https://github.com/MacCracken/sandhi/blob/main/docs/proposals/2026-05-22-darshana-color-mode-helpers.md).
+
+### Removed
+
+- `_isatty_compat`, `_fg_256_buf_compat`, `_sgr_buf_compat` in
+  `src/color.cyr` — replaced by darshana 0.5.3's
+  `tty_isatty` / `tty_fg_256_buf` / `tty_sgr_buf`. ~50 LOC
+  removed. Call sites in `color.cyr` (detect path) and
+  `filter.cyr` (`_phase_esc_init` mode branches) rewritten.
+  Tests in `tests/anuenue.tcyr` updated to call the darshana
+  forms; assertions count unchanged at 241 passing. Golden
+  check passes byte-identically (256-color and 16-color
+  fixture outputs match the v0.7.0 bytes exactly — the
+  signature-identical swap was correct).
+
 ## [0.7.0] — 2026-05-22 — M6: Color-Mode Negotiation
 
 The four-mode cut. anuenue stops assuming 24-bit truecolor and

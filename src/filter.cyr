@@ -124,11 +124,9 @@ fn _phase_esc_init(): i64 {
         if (ANUENUE_COLOR_MODE == ANUENUE_COLOR_TRUE) {
             elen = tty_fg_rgb_buf(&ebuf, 0, r, g, b);
         } else { if (ANUENUE_COLOR_MODE == ANUENUE_COLOR_256) {
-            # TODO(sandhi 0.5.3): replace with tty_fg_256_buf
-            elen = _fg_256_buf_compat(&ebuf, 0, _rgb_to_256(r, g, b));
+            elen = tty_fg_256_buf(&ebuf, 0, _rgb_to_256(r, g, b));
         } else { if (ANUENUE_COLOR_MODE == ANUENUE_COLOR_16) {
-            # TODO(sandhi 0.5.3): replace with tty_sgr_buf
-            elen = _sgr_buf_compat(&ebuf, 0, _rgb_to_16(r, g, b));
+            elen = tty_sgr_buf(&ebuf, 0, _rgb_to_16(r, g, b));
         } else {
             # MONO falls through with elen=0; the table won't be
             # used (main.cyr dispatches to passthrough) but
