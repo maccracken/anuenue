@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-22
+
 M7 (docs) + M8 (security audit) folded into one cycle — the audit
 turned up one HIGH-severity finding small enough to fix in-cycle,
 so v0.8.0 ships the doc set + the closing fix in a single cut

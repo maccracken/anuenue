@@ -14,14 +14,14 @@ Position in the AGNOS userland: founder of the **pipe-decorator family** (see [s
 
 Tagged when **all** of the following hold:
 
-- [ ] **Public CLI surface frozen** — every flag documented, every flag exercised in tests, every flag behavior matches docs *(M2 shipped the surface at v0.3.0; freeze happens at M7)*
+- [x] **Public CLI surface frozen** — every flag documented, every flag exercised in tests, every flag behavior matches docs *— shipped at M7 / v0.8.0; refreshed `print_usage`, three ADRs (0001/0002/0003), `docs/guides/integrating-anuenue.md`, and eight runnable examples land the contract*
 - [x] **UTF-8 correct by default** — grapheme-cluster aware cycling (Ruby lolcat got this wrong; AGNOS ships it right) *— shipped at M3 / v0.4.0; practical-subset classifier, ADR 0003 (M7) records the trade vs full UAX #29*
 - [x] **TTY-aware** — no ANSI when stdout isn't a terminal; sensible behavior with `NO_COLOR` env *— shipped at M6 / v0.7.0; isatty via darshana 0.5.3's `tty_isatty` (sandhi closeout v0.7.1); NO_COLOR / `--no-color` / stdout-not-TTY all route to MONO*
 - [x] **Color-mode negotiation** — 24-bit / 256-color / 16-color / monochrome fallback per `TERM` + `COLORTERM` *— shipped at M6 / v0.7.0; four-mode taxonomy with priority chain, override via `--color <mode>`*
 - [x] **Animation parity with `lolcat -a`** — cursor positioning, frame timing, signal-safe (SIGINT restores cursor) *— shipped at M4 / v0.5.0; non-blocking signalfd probe between frames, `tty_cursor_up` re-anchor, 16 ms frame interval*
 - [x] **Per-character overhead measured** — benchmark showing the cost vs `cat`, tracked in `docs/benchmarks.md` *— M5 (v0.6.0) shipped scripts/perf-bench.sh as the ratchet; ASCII no-LF at 47 ns/byte, below the v0.3.0 53 ns/byte floor*
 - [ ] **Dogfooded** in real AGNOS pipelines (`iam | anuenue` MOTD; `bnrmr | anuenue` banners) for at least one minor-cycle window *(blocked on first consumer wiring, anticipated post-M6)*
-- [ ] **Security audit pass** — `docs/audit/YYYY-MM-DD-audit.md` clean; specific checks for stdin-bytes-as-untrusted and buffer-bounds on the line buffer *(M8)*
+- [x] **Security audit pass** — `docs/audit/YYYY-MM-DD-audit.md` clean; specific checks for stdin-bytes-as-untrusted and buffer-bounds on the line buffer *— shipped at M8 / v0.8.0; [`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md), 1 HIGH (fixed in-cycle: `_render_frame` long-cluster heap overflow), 1 LOW + 8 INFO; zero HIGH+ open at the audit close*
 - [x] **CHANGELOG complete** from v0.1.0 onward *— all eight cuts (v0.1.0 → v0.7.1) sectioned; maintained at every cut*
 - [ ] **Downstream gate**: at least one consumer green (likely `agnoshi` MOTD pipeline or `iam`'s default chain) *(see Dogfooded above — same blocker)*
 
@@ -45,24 +45,27 @@ Explicitly **not** wired (evaluated and rejected for v1.0):
 
 ## Current focus
 
-**Next slot: M7 — Public-Surface Freeze + Guide Docs (v0.8.0).**
-Three ADRs (pipe-purity / HSV-inline / grapheme-cluster cycling),
-the integration guide, runnable examples. Refresh `print_usage`
-help text to cover M6's new flags. The "freeze" half is the
-contract: every flag documented, every flag exercised in tests,
-every flag behaviour matches docs. No dep gate; this is the doc
-half of the v1.0 surface lock.
+**Next slot: v1.0.0 — GA tag.** Surface frozen at v0.8.0;
+capability baseline recorded by the M8 audit; documentation set
+complete; eight prior cuts gated by tests + goldens + animate-
+smoke + perf-bench. The two remaining v1.0 acceptance items are
+*Dogfooded* and *Downstream gate* — both blocked on at least one
+external consumer (likely `agnoshi` MOTD pipeline or `iam`)
+wiring anuenue in for a minor-cycle soak window. Tagged on user
+signal per
+[feedback_no_unprompted_version_bumps](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_no_unprompted_version_bumps.md).
 
 **Shipped:** M0 (v0.1.0) → M1 (v0.2.0) → M2 (v0.3.0) → M3 (v0.4.0)
-→ M4 (v0.5.0) → M5 (v0.6.0) → M6 (v0.7.0). See the per-milestone
-entries below for delivered surface.
+→ M4 (v0.5.0) → M5 (v0.6.0) → M6 (v0.7.0) → sandhi closeout
+(v0.7.1) → **M7 (docs) + M8 (audit) (v0.8.0)**. See the
+per-milestone entries below for delivered surface.
 
-**Remaining to v1.0:** M7 (surface freeze + ADRs) → M8 (security
-closeout) → v1.0.0 (tag on user signal).
+**Remaining to v1.0:** consumer soak window → v1.0.0 tag on
+user signal.
 
 ## Milestones
 
-### Shipped — M0 through M6 + sandhi closeout
+### Shipped — M0 through M8
 
 Full per-cut narratives live in [`CHANGELOG.md`](../../CHANGELOG.md);
 this table is just the index.
@@ -77,33 +80,7 @@ this table is just the index.
 | v0.6.0   | M5 — Performance Pass           | ASCII short-circuit + binary-searched `cp_is_extending` LUT + 1 530-entry phase-cached escape buffer. 91.6 → 47.0 ns/B. |
 | v0.7.0   | M6 — Color-Mode Negotiation     | TRUECOLOR / 256 / 16 / MONO with priority chain; `--no-color` / `--force-color` / `--color <mode>` flags.               |
 | v0.7.1   | Sandhi closeout                 | darshana 0.5.3 swap (`tty_isatty` / `tty_sgr_buf` / `tty_fg_256_buf`); stand-ins removed; DCE cap raised 350 → 512 KB.   |
-
-### M7 — Public-Surface Freeze + Guide Docs (v0.8.0) — *next*
-
-API/CLI contract freeze + downstream-consumer documentation. Three ADRs queued (none written yet — see [`docs/adr/`](../adr/) status):
-
-- `0001-pipe-purity.md` — why no file I/O / no config / no themes. The constraint that shapes everything.
-- `0002-hsv-inline-not-abaco.md` — why HSV→RGB stays inline rather than pulling abaco.
-- `0003-grapheme-cluster-cycling.md` — why M3 shipped a practical-subset classifier instead of full UAX #29 / vyakarana / a generated table. Includes the Hangul L/V/T trade.
-
-Plus:
-
-- `docs/guides/integrating-anuenue.md` — how MOTD pipelines compose with anuenue.
-- `docs/examples/` — runnable Cyrius programs showing pipe composition.
-
-**Acceptance**: every flag documented in `docs/guides/`; every public symbol cited from at least one example; all three ADRs in `Accepted` status.
-
-### M8 — Security Audit + Closeout (v0.9.0)
-
-P(-1) hardening pass before the v1.0 freeze.
-
-- Full security checklist: input validation (stdin bytes treated as untrusted — already a project rule, audit makes it explicit), buffer bounds on the 32 KB line buffer + 4 KB read buffer, syscall review (verify the capability surface hasn't grown past read/write/brk/exit + open/close-for-cmdline + M4's signal additions), command-injection grep, path-traversal grep.
-- Findings → `docs/audit/YYYY-MM-DD-audit.md` with severity tags.
-- All HIGH+ findings closed before v1.0 tag.
-- Closeout-pass checklist (see CLAUDE.md § Closeout Pass) all green.
-- Sandhi-fold any drifted deps (darshana / sakshi / agnostik) to current GA.
-
-**Acceptance**: audit doc filed; zero HIGH+ findings open; downstream build chain green against the closeout candidate.
+| v0.8.0   | M7 + M8 — Docs + Audit          | Three ADRs (pipe-purity / HSV-inline / grapheme-cluster), integration guide, 8 examples, refreshed `print_usage`. M8 audit found + fixed one HIGH (`_render_frame` long-cluster heap overflow); zero HIGH+ open. |
 
 ### v1.0.0 — GA
 
