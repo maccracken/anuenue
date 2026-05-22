@@ -80,5 +80,51 @@ pass "exit 0 after SIGINT"
 tail -c 50 "$OUT" | grep -q "${ESC}\[?25h" || fail "cursor-show NOT in last 50 bytes of SIGINT output — terminal left dirty"
 pass "cursor-show present in cleanup tail"
 
+# --- M8 audit (2026-05-22) — long-cluster heap-overflow regression --
+# A grapheme cluster's byte length is unbounded in anuenue's
+# practical-subset classifier (base + N combining marks → 1 cluster).
+# The pre-fix _render_frame wrote the full cluster into a 32 KB
+# line_buf and only checked the flush reserve afterward — a 65 KB
+# adversarial cluster overflowed the heap. Post-fix
+# (docs/audit/2026-05-22-audit.md § Finding 1) the inner cluster-
+# copy loop flushes mid-cluster and re-emits the same phase escape.
+#
+# This test runs the historical attack pattern and asserts (a) clean
+# exit, (b) every base + combiner byte makes it through to stdout.
+echo "[animate-smoke] M8 audit — long-cluster pathological input"
+LONG_OUT=$(mktemp)
+trap 'rm -f "$OUT" "$LONG_OUT"' EXIT INT TERM
+
+# 16000 × (U+0301 = 0xCC 0x81) = 32000 bytes of combining acute,
+# preceded by 'A'. Pre-fix: clen = 32001 > LINE_BUF (32768) when
+# coupled with the 19-byte escape prefix — heap overflow.
+# Post-fix: mid-cluster flush splits the write across multiple
+# file_write calls. Single-frame run (-d 0 + SIGINT) keeps the
+# captured output bounded for the byte-count assertion.
+(
+    {
+        printf 'A'
+        i=0
+        while [ "$i" -lt 16000 ]; do
+            printf '\xcc\x81'
+            i=$((i + 1))
+        done
+    } | "$BIN" --color=24bit -a -d 1 > "$LONG_OUT" 2>&1
+) || fail "long-cluster run exited non-zero (want 0)"
+pass "exit 0 on long-cluster input"
+
+# Count the combining-acute leading byte 0xCC (octal \314) in the
+# captured output. We expect at least 16000 — one per input
+# combiner per frame; the animation may repaint many frames, so the
+# lower bound is what matters. `tr` + `wc` works on binary; `grep`
+# would miss because bytes can land on lines with escape framing.
+# (0xCC isn't a legal byte inside an ANSI SGR escape — those use
+# `\x1b[…m` with only ASCII — so the count is unambiguous.)
+COMBINERS=$(tr -cd '\314' < "$LONG_OUT" | wc -c)
+if [ "$COMBINERS" -lt 16000 ]; then
+    fail "lost combining-acute bytes — input 16000, output $COMBINERS (mid-cluster flush dropped bytes?)"
+fi
+pass "all 16000 combiner bytes preserved through mid-cluster flush ($COMBINERS in output)"
+
 echo
 echo "animate-smoke: PASS"

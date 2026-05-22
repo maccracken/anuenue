@@ -4,6 +4,100 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+M7 (docs) + M8 (security audit) folded into one cycle — the audit
+turned up one HIGH-severity finding small enough to fix in-cycle,
+so v0.8.0 ships the doc set + the closing fix in a single cut
+rather than splitting M7/M8 across two releases. Zero HIGH+
+findings open at the end of the audit (see
+[`docs/audit/2026-05-22-audit.md`](docs/audit/2026-05-22-audit.md)).
+
+### Added
+
+- **`docs/adr/0001-pipe-purity.md`** — formal record of the
+  stdin → stdout / no-config / no-themes constraint. Documents the
+  capability surface (read/write/brk/exit + bounded
+  open/close/ioctl for cmdline + environ + isatty), the two
+  deliberate relaxations (M4 64 KB animation buffer; M6 MONO
+  passthrough), and the alternatives considered (lolcat-shaped
+  file-input surface, theme env vars, no-animation-at-all). The
+  rule that shapes everything else.
+- **`docs/adr/0002-hsv-inline-not-abaco.md`** — formal record of
+  the "don't pull abaco for ~30 lines of integer math" decision.
+  Notes the two post-v1.0 revisit triggers (a second pipe-
+  decorator wanting HSV; user-supplied colour expressions becoming
+  a real ask) and the Cyrius-stdlib alternative if stdlib ever
+  ships a `color` module.
+- **`docs/adr/0003-grapheme-cluster-cycling.md`** — formal record
+  of the practical-subset classifier shipped at M3. Documents the
+  21 covered ranges, the explicit misses (Hangul L/V/T composition;
+  Devanagari spacing marks; tag sequences), and the monotonic
+  upgrade path to full UAX #29 if a v2 release wants it. Closes
+  out the long-standing carry-forward from
+  [`docs/development/state.md`](docs/development/state.md).
+- **`docs/guides/integrating-anuenue.md`** — integration guide for
+  downstream tool authors (iam, bnrmr, agnoshi, future MOTD
+  participants). Covers the contract table (input / output /
+  errors / exit codes / state / concurrency), the full capability
+  surface, TTY detection + colour-mode chain, the three
+  integration patterns (direct compose / opt-in env var /
+  programmatic), and a testing harness pattern (determinism +
+  NO_COLOR equivalence).
+- **`docs/examples/` populated** — eight runnable shell scripts
+  exercising the full M2/M3/M4/M6 surface: `01-hello-rainbow.sh`,
+  `02-deterministic-seed.sh`, `03-utf8-clusters.sh`,
+  `04-motd-pipeline.sh`, `05-color-mode-override.sh`,
+  `06-no-color.sh`, `07-animation.sh`, `08-force-color.sh`. Each
+  cites the source symbol + ADR it demonstrates. README.md is an
+  index. The v1.0 acceptance criterion "every public symbol cited
+  from at least one example" lands here.
+
+### Changed
+
+- **`print_usage` Examples section refreshed** in `src/main.cyr`.
+  The previous text only covered the M1/M2 flags (`-p`, `-s`);
+  now `--help` shows seven canonical invocations covering `-p`,
+  `-s`, `-a`, `NO_COLOR`, `--color=256`, `--color=16`, and
+  `--force-color | tee`. Closes the M7 carry-forward in
+  [`docs/development/state.md`](docs/development/state.md). Stderr-
+  only emission, so pipe-purity holds.
+- **`docs/adr/README.md`** — index populated; previous "no ADRs
+  yet" placeholder replaced by the three-row table above.
+
+### Security
+
+- **HIGH (fixed in this cut)**: `_render_frame` heap overflow on
+  long-cluster animation input. The pre-fix code wrote a full
+  cluster's bytes into `line_buf` (32 KB) before checking
+  `ANUENUE_FLUSH_RESERVE`. Adversarial input shaped as `[base
+  char][N × U+0301]` with `N ≈ 32 500` produces a single
+  grapheme cluster ~65 KB long (per the practical-subset
+  classifier from [ADR 0003](docs/adr/0003-grapheme-cluster-cycling.md));
+  the cluster bytes overflowed `line_buf` by ~32 KB, corrupting
+  the adjacent `_PHASE_ESC_TABLE` allocation. Fix: mid-cluster
+  flush guard in `_render_frame`'s byte-copy loop — flush + re-
+  emit the same phase escape whenever the reserve threshold trips
+  mid-cluster, so visible colour stays consistent and the buffer
+  never overruns. Filter path (`anuenue_filter` in
+  `src/filter.cyr`) was *not* affected because it writes one
+  codepoint per iteration and checks the reserve between each;
+  fix is local to `src/animate.cyr`. Regression coverage:
+  `scripts/animate-smoke.sh` now runs the historical attack
+  pattern (16 000 combiners after a base char) and asserts both
+  clean exit and full byte preservation through the mid-cluster
+  flushes; `tests/anuenue.tcyr` group "M8 audit —
+  _pretag_clusters long-combiner chain" locks the pre-tag
+  invariant at the unit-test level. Full audit findings (HIGH
+  +9 INFO/LOW) recorded in
+  [`docs/audit/2026-05-22-audit.md`](docs/audit/2026-05-22-audit.md).
+- **Audit pass (M8 acceptance)**: zero HIGH+ findings open at
+  the end of the audit. Capability surface confirmed clean (no
+  `sys_system`, no `fork`/`execve`, no `socket`/`connect`); open/
+  close bounded to `/proc/self/cmdline` + `/proc/self/environ`;
+  UTF-8 surface degrades gracefully on every adversarial input
+  tried; phase arithmetic absorbs any user-supplied seed/offset
+  via modulo normalization. Full v1.0 capability baseline
+  recorded in the audit doc.
+
 ## [0.7.1] — 2026-05-22 — Sandhi closeout (darshana 0.5.3)
 
 The M6 follow-up cut. Closes the sandhi-coordination loop opened

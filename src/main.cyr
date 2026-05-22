@@ -68,9 +68,14 @@ fn print_usage(fs): i64 {
     _eprint("Options:\n");
     flags_print_help(fs);
     _eprint("\nExamples:\n");
-    _eprint("  echo \"AGNOS\" | anuenue\n");
-    _eprint("  iam | anuenue -p 3                 # tighter rainbow\n");
-    _eprint("  bnrmr \"AGNOS\" | anuenue -s 42      # deterministic seed\n");
+    _eprint("  echo \"AGNOS\" | anuenue                       # one-shot rainbow tint\n");
+    _eprint("  iam | anuenue -p 3                           # tighter rainbow (MOTD pipeline)\n");
+    _eprint("  bnrmr \"AGNOS\" | anuenue -s 42                # deterministic seed\n");
+    _eprint("  cat poem.txt | anuenue -a                    # animate (~5 s, Ctrl-C to stop)\n");
+    _eprint("  NO_COLOR=1 echo \"AGNOS\" | anuenue            # passthrough — byte-identical to input\n");
+    _eprint("  echo \"AGNOS\" | anuenue --color=256           # quantize to xterm 256-cube\n");
+    _eprint("  echo \"AGNOS\" | anuenue --color=16            # bright-16 ANSI palette\n");
+    _eprint("  iam | anuenue --force-color | tee motd.ansi  # keep colour through a non-TTY pipe\n");
     return 0;
 }
 

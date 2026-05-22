@@ -19,4 +19,8 @@ Decisions about anuenue — what we chose, the context, and the consequences we 
 
 ## Index
 
-_No ADRs yet. Add the first as `0001-kebab-case-title.md`._
+| ADR | Title | Status |
+|-----|-------|--------|
+| [0001](0001-pipe-purity.md) | Pipe-purity: no file I/O, no config, no themes | Accepted |
+| [0002](0002-hsv-inline-not-abaco.md) | HSV→RGB stays inline; no abaco dependency | Accepted |
+| [0003](0003-grapheme-cluster-cycling.md) | Cycle by grapheme cluster via a practical-subset classifier | Accepted |

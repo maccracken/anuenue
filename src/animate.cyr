@@ -263,9 +263,27 @@ fn _render_frame(buf, ctab, n_clusters, phase_base, line_buf, input_ends_with_lf
         # Emit fg escape + cluster bytes under one colour. M5 (v0.6.0)
         # routes through the phase-cached escape table — same shape
         # as the filter loop's hot path.
+        #
+        # M8 (audit 2026-05-22) — mid-cluster flush guard. Grapheme
+        # clusters in anuenue's practical-subset classifier are
+        # unbounded in byte length (base + N combining marks / ZWJ
+        # chains / RI pairs). The animation input cap is 64 KB but
+        # the line buffer is 32 KB, so a single pathological cluster
+        # can exceed the line buffer. The pre-fix code checked
+        # FLUSH_RESERVE only AFTER the cluster write, which is too
+        # late. The guard below checks per-byte and splits the
+        # cluster across multiple flushes when needed, re-emitting
+        # the same phase escape after each flush so visible colour
+        # stays consistent.
         pos = _emit_phase_esc(line_buf, pos, phase);
         var k = 0;
         while (k < clen) {
+            if (pos + ANUENUE_FLUSH_RESERVE > ANUENUE_LINE_BUF) {
+                pos = tty_sgr_reset_buf(line_buf, pos);
+                file_write(STDOUT, line_buf, pos);
+                pos = 0;
+                pos = _emit_phase_esc(line_buf, pos, phase);
+            }
             store8(line_buf + pos, load8(buf + off + k));
             pos = pos + 1;
             k = k + 1;
