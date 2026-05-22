@@ -5,6 +5,14 @@
 
 ## Version
 
+**0.3.0** — *current.* **M3 work landed into `[Unreleased]`** —
+UTF-8 grapheme awareness: filter cycles by cluster, not byte.
+Combining marks / ZWJ-extending / regional-indicator pairs all
+fold into single clusters. ASCII path stays byte-identical (v0.3.0
+golden green). Three new corpus goldens; 30 new tcyr assertions.
+Pending user-driven open of 0.4.0 per
+`feedback_no_unprompted_version_bumps`.
+
 **0.3.0** — cut 2026-05-21 (open + close compressed, third same-day
 release with 0.1.0 / 0.2.0). **M2 closed.** Five-flag CLI
 (`-h`/`-V`/`-p`/`-s`/`-F`) sits between argv and the M1 filter loop;
@@ -23,10 +31,23 @@ filter — pure scaffold release.
 
 ## Phase
 
-**M2 closed at v0.3.0.** Next slot is **M3 — UTF-8 Grapheme
-Awareness (v0.4.0)** per [roadmap.md](roadmap.md): cycle by
-grapheme cluster, not byte. Multi-byte UTF-8 characters (and
-combining sequences, ZWJ emoji) get one phase advance, not N.
+**M3 (UTF-8 Grapheme Awareness) — implementation complete; pending
+v0.4.0 cycle-open + tag.** Cluster classification covers combining
+marks, ZWJ-joined sequences, regional-indicator pairs, and
+variation selectors. Invalid UTF-8 → graceful degradation (per-byte
+cycling, never panic). Chunk-boundary handling: partial sequences
+carry to the next read; EOF with carry emits remaining bytes as
+singletons.
+
+Practical-subset classifier vs full UAX #29: ships ~18 combining-
+mark ranges + ZWJ + VS + RI. Hangul L/V/T composition and some
+Brahmic spacing-mark sequences misclassify as advancing (errs on
+"more rainbow, not less"). ADR 0003 (M7) will record the trade.
+
+Next slot is **M4 — Animation Mode (v0.5.0)** per
+[roadmap.md](roadmap.md): `-a` / `-d <duration>` / `-S <speed>`
+plus cursor positioning + SIGINT handler. Dep gate: darshana::cursor
+(already in 0.5.x).
 
 ## Toolchain
 
@@ -37,7 +58,7 @@ combining sequences, ZWJ emoji) get one phase advance, not N.
 
 | File | Lines | Surface |
 |------|-------|---------|
-| `src/filter.cyr` | ~190 | `ANUENUE_*` constants (phase mod, phase step, phase start, line-buf / read-chunk / flush-reserve sizing); `hsv_rainbow(phase, out_rgb)` — integer 6-sector HSV; `anuenue_filter()` — stdin→stdout loop with LF-flush + force-flush. Library surface; testable in isolation. M2 made `ANUENUE_PHASE_STEP` and `ANUENUE_PHASE_START` flag-overridable (mutable, written from main before filter runs). |
+| `src/filter.cyr` | ~440 | `ANUENUE_*` constants (phase mod/step/start, line-buf / read-chunk / flush-reserve sizing — flush-reserve bumped 22→32 at M3 for 4-byte codepoints); `hsv_rainbow(phase, out_rgb)` — integer 6-sector HSV. **M3 (v0.4.0)**: `utf8_seq_len(buf, i, n)` returns 1/2/3/4 valid, 0 truncated, 1 invalid; `utf8_decode(buf, i, seqlen)` codepoint assembly; `cp_is_extending(cp)` practical-subset combining-mark classifier; `cp_is_regional_indicator(cp)` flag pair. `anuenue_filter()` cluster-aware loop with three latches (`saw_any`, `prev_was_zwj`, `prev_unpaired_ri`) and chunk-boundary carry. M2 made `ANUENUE_PHASE_STEP` and `ANUENUE_PHASE_START` flag-overridable. |
 | `src/main.cyr` | ~110 | Entrypoint + flag dispatch. args_init / alloc_init / flags context (-h/-V/-p/-s/-F) / argv pack / flags_parse / dispatch to print_version / print_usage / anuenue_filter. M2 grew this from ~20 lines (scaffold-shell) to ~110 with the flag surface. |
 | `src/version_str.cyr` | ~18 | **AUTO-GENERATED** by `scripts/version-bump.sh`. Holds `_VERSION_STR_ANUENUE` + `_VERSION_LEN_ANUENUE`. Never hand-edit; CI's Version consistency step asserts the literal matches `VERSION`. |
 | `src/test.cyr` | 12 | top-level test entry stub (referenced by `cyrius.cyml [build].test`). Actual tests live in `tests/anuenue.tcyr`. |
@@ -49,26 +70,26 @@ grapheme-boundary logic crowds the filter loop.
 
 ## Binary
 
-- **Size (0.3.0, DCE on)**: **317 216 bytes** (~310 KB) from a clean
-  `rm -rf build && cyrius deps && CYRIUS_DCE=1 cyrius build`.
-  Delta vs 0.2.0: **+12 848 bytes** for the args + flags stdlib
-  modules + version_str. M5 (perf pass) will set a production
+- **Size (0.4.0 candidate, DCE on)**: **322 368 bytes** (~315 KB).
+  Delta vs 0.3.0: **+5 152 bytes** for the UTF-8 + grapheme-
+  classification surface. M5 (perf pass) will set a production
   budget against this floor.
-- **DCE elimination**: 1 239 unreachable fns, 217 727 bytes NOPed.
-- **Prior floors**: 0.2.0 = 304 368 bytes (1 236 fns NOPed).
+- **DCE elimination**: 1 239 unreachable fns, 218 003 bytes NOPed.
+- **Prior floors**: 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
 - **Output path**: `build/anuenue`
 
 ## Tests
 
 | File | Status |
 |------|--------|
-| `tests/anuenue.tcyr` | **74 assertions across 13 groups** (smoke; HSV canonical hues; HSV sector ramps; HSV phase normalization; filter-geometry flush-reserve sizing; filter-constant sanity; **M2 flags**: long/short bool, short -V, int -p/-s/-F, --freq=N attached, additive seed+offset, error variants UNKNOWN/MISSING_VALUE/BAD_INT, version literal shape). Cyrius can't trivially redirect fd 0/1 in unit scope, so the end-to-end byte-stream is owned by the golden harness. |
+| `tests/anuenue.tcyr` | **104 assertions across 18 groups**. M1: smoke/HSV/geometry/constants (47). M2: long/short bool, int extraction, attached long-form, additive seed+offset, error variants, version literal (27). **M3: utf8_seq_len 1/2/3/4-byte detection, invalid + truncated handling, utf8_decode canonical codepoints, cp_is_extending across ranges, cp_is_regional_indicator bounds (30)**. Cyrius can't trivially redirect fd 0/1 in unit scope, so the end-to-end byte-stream is owned by the golden harness. |
 | `tests/anuenue.bcyr` | **2 micro-benchmarks** (1M iter each): `hsv_rainbow` ≈8 ns/call, `tty_fg_rgb_buf` ≈45 ns/call. Captured against the M1 baseline in `docs/benchmarks.md`. |
-| `tests/anuenue.fcyr` | fuzz stub — first harness still pending; the M2 flag parser is now the natural target. |
-| `tests/golden/agnos-rainbow-s100.out` | **238-byte fixture** for `printf "AGNOS rainbow" \| anuenue -s 100`. Drift = regression in filter / HSV / darshana. Asserted by `scripts/golden-check.sh` and CI's **Golden output** step. |
+| `tests/anuenue.fcyr` | fuzz stub — first harness still pending. The M3 UTF-8 surface (`utf8_seq_len` over random byte tokens) is now the natural target since invalid-input handling is documented + tested. |
+| `tests/golden/*.out` | **Four fixtures**: `agnos-rainbow-s100` (M2 ASCII baseline, 238 B), `cjk-mixed-s0` (M3 CJK+ASCII, 125 B), `combining-s0` (M3 é + rainbow, 155 B), `zwj-flag-s0` (M3 ZWJ family + flag, 135 B). Asserted by `scripts/golden-check.sh` and CI's **Golden output** step. |
 
-Assertion target M2: doubled (74 vs M1's 47). M3 will add UTF-8
-corpus coverage on top.
+Assertion target M3: M2's 74 → 104 (+30). M4 (animation) likely
+adds a small set since cursor + signal handling resist unit-level
+testing.
 
 ## Dependencies
 
@@ -116,4 +137,4 @@ Anticipated at v0.7+:
 
 ## Next
 
-See [roadmap.md § M3](roadmap.md#m3--utf-8-grapheme-awareness-v040).
+See [roadmap.md § M4](roadmap.md#m4--animation-mode-v050).

@@ -56,17 +56,16 @@ var ANUENUE_LINE_BUF = 32768;
 var ANUENUE_READ_CHUNK = 4096;
 
 # Reserve threshold inside the line buffer. The check fires AFTER
-# the latest character has been appended; at that point the buffer
-# holds at worst `max_escape (19) + payload byte (1) = 20` bytes
-# beyond whatever was there at loop entry, and the flush will then
-# append a 4-byte reset. So the reserve must cover ≥ 20 + 4 = 24...
-# but the check uses `pos + RESERVE > LINE_BUF`, which fires
-# preemptively. With RESERVE = 22, flush fires when there's only
-# 21 bytes of headroom — JUST enough for one more escape+byte (20)
-# plus the reset+LF path (5) if the next byte is an LF. The
-# `tests/anuenue.tcyr` `filter geometry — flush reserve sizing`
-# group asserts the inequality.
-var ANUENUE_FLUSH_RESERVE = 22;
+# the latest character has been appended. At M3 a "character" can be
+# a 4-byte UTF-8 sequence prefixed by one fg escape (19 worst case),
+# so the worst-case append is 19 (escape) + 4 (sequence bytes) = 23
+# bytes per codepoint; flush then adds 4 (reset). RESERVE must
+# cover the last-appended codepoint + reset = 23 + 4 = 27, and is
+# rounded to 32 for headroom against future grapheme-cluster code-
+# point chains (a base-codepoint + a few combining marks emit as
+# escape + base + combiners, all under one fg). v0.2.0/v0.3.0
+# byte-loop used 22; v0.4.0 bumped to 32 for the 4-byte codepoint.
+var ANUENUE_FLUSH_RESERVE = 32;
 
 # ---- hsv_rainbow ---------------------------------------------------
 #
@@ -132,6 +131,167 @@ fn hsv_rainbow(phase, out_rgb): i64 {
     return 0;
 }
 
+# ---- UTF-8 sequence detection + codepoint decode ------------------
+#
+# anuenue at M3 (v0.4.0) cycles by Unicode codepoint, not byte —
+# multi-byte UTF-8 characters get one phase advance, not N. This is
+# the layer that recognises sequence boundaries and decodes them.
+#
+# Roadmap explicitly evaluated vyakarana (siblings registry) vs
+# stdlib + inline; vyakarana is a source-code TOKENIZER (token-kind
+# spans for syntax highlighting) — wrong domain. Stdlib ships
+# `_utf8_encode` (codepoint → bytes) only. So: implemented inline,
+# right next to anuenue_filter where it's used.
+#
+# Invalid bytes (overlong leaders, missing continuations, etc) get
+# the "graceful degradation" treatment from the roadmap:
+# `utf8_seq_len` returns 1, the filter emits the offender as a
+# single-byte cluster, advances phase, and keeps going. Never panic,
+# never over-read.
+
+# Number of bytes in the UTF-8 sequence beginning at `read_buf + i`,
+# given `n` bytes are available in `read_buf` total.
+# Returns:
+#   1..4  — valid sequence of that length
+#   1     — invalid leading byte / invalid continuation (graceful
+#           degradation: emit the offender as a 1-byte cluster)
+#   0     — leading byte expects N more bytes, but only M<N are
+#           present in the buffer (truncated at chunk boundary).
+#           Caller carries those bytes to the next read.
+fn utf8_seq_len(read_buf, i, n) {
+    var b0 = load8(read_buf + i);
+    # ASCII fast path — most MOTD / shell input.
+    if (b0 < 0x80) { return 1; }
+    # 0x80-0xC1: bare continuation or overlong-encoded ASCII —
+    # always invalid as a leading byte.
+    if (b0 < 0xC2) { return 1; }
+    var needed = 2;
+    if (b0 >= 0xE0) { needed = 3; }
+    if (b0 >= 0xF0) { needed = 4; }
+    # 0xF5-0xFF: 5+ byte leaders disallowed by RFC 3629 (limited to
+    # Unicode U+10FFFF max).
+    if (b0 >= 0xF5) { return 1; }
+    # Truncated at chunk boundary — defer.
+    if (i + needed > n) { return 0; }
+    # Continuation bytes must be 10xxxxxx (0x80-0xBF). Cyrius
+    # `break`-with-var is unreliable per CLAUDE.md, so we use a
+    # validity flag instead.
+    var valid = 1;
+    var k = 1;
+    while (k < needed) {
+        var bk = load8(read_buf + i + k);
+        if ((bk & 0xC0) != 0x80) { valid = 0; }
+        k = k + 1;
+    }
+    if (valid == 0) { return 1; }
+    return needed;
+}
+
+# Decode the UTF-8 sequence at `read_buf + i` of length `seqlen`
+# (1..4) into a Unicode codepoint. Caller must have validated via
+# `utf8_seq_len` first; this fn does NO validation (any bit pattern
+# outside the documented continuation form yields garbage). The
+# `& 0x1F / 0x0F / 0x07` masks strip the leading-byte type bits;
+# `& 0x3F` strips each continuation byte's `10xxxxxx` marker.
+fn utf8_decode(read_buf, i, seqlen) {
+    if (seqlen == 1) { return load8(read_buf + i); }
+    if (seqlen == 2) {
+        return ((load8(read_buf + i) & 0x1F) << 6)
+             |  (load8(read_buf + i + 1) & 0x3F);
+    }
+    if (seqlen == 3) {
+        return ((load8(read_buf + i) & 0x0F) << 12)
+             | ((load8(read_buf + i + 1) & 0x3F) << 6)
+             |  (load8(read_buf + i + 2) & 0x3F);
+    }
+    # seqlen == 4 (the only remaining valid case)
+    return ((load8(read_buf + i) & 0x07) << 18)
+         | ((load8(read_buf + i + 1) & 0x3F) << 12)
+         | ((load8(read_buf + i + 2) & 0x3F) << 6)
+         |  (load8(read_buf + i + 3) & 0x3F);
+}
+
+# ---- grapheme cluster classification ------------------------------
+#
+# A grapheme cluster is what a human reads as "one character" — `é`
+# (e + combining acute), `🏳️‍🌈` (rainbow flag = white flag + VS-16
+# + ZWJ + rainbow), `🇺🇸` (US flag = two regional indicators). The
+# rainbow phase should advance ONCE per cluster, not per codepoint.
+#
+# Full UAX #29 needs a several-thousand-entry codepoint database
+# (Mn / Mc / Me categories, GraphemeBreakProperty tables). For
+# anuenue's domain (MOTD pipelines, banner output, shell prompts)
+# we ship a **practical subset**:
+#
+#   - Combining Diacritical Marks (Latin/Greek) — U+0300..036F
+#   - Cyrillic combining — U+0483..0489
+#   - Hebrew points + cantillation — U+0591..05BD, 05BF, 05C1-C2,
+#     05C4-C5, 05C7
+#   - Arabic — U+0610-061A, 064B-065F, 0670, 06D6-DC, 06DF-E4,
+#     06E7-E8, 06EA-ED
+#   - ZWJ (U+200D) — emoji-sequence joiner; treat as extending so
+#     a base + ZWJ + extension renders as one cluster (e.g. 👨‍👩‍👧).
+#   - Variation Selectors — U+FE00..FE0F (incl. VS-15 = text, VS-16
+#     = emoji)
+#   - Combining Half Marks — U+FE20..FE2F
+#   - Math-zone combiners — U+1AB0..1ACE, 1DC0..1DFF, 20D0..20F0
+#   - Variation Selectors Supplement — U+E0100..E01EF
+#
+# Things this DOESN'T fully model:
+#   - Hangul L/V/T/LV/LVT syllable composition (Korean)
+#   - Devanagari + other Brahmic vowel-mark sequences (the spacing
+#     marks need extra rules — we treat them as advancing for now)
+#   - Tag sequences (subdivision flags)
+#
+# Misclassifying these errs on the side of "advance more often than
+# strictly correct" — never under-advances, so the rainbow stays
+# visible. ADR 0003 (M7) will record this trade-off; the doc rule
+# in CLAUDE.md is "UTF-8 robustness: invalid byte sequences must
+# not panic, must not over-read" — both honoured by this subset.
+fn cp_is_extending(cp) {
+    # Combining Diacritical Marks — Latin/Greek/Cyrillic accents
+    if (cp >= 0x0300 && cp <= 0x036F) { return 1; }
+    # Cyrillic combining
+    if (cp >= 0x0483 && cp <= 0x0489) { return 1; }
+    # Hebrew points + cantillation
+    if (cp >= 0x0591 && cp <= 0x05BD) { return 1; }
+    if (cp == 0x05BF) { return 1; }
+    if (cp >= 0x05C1 && cp <= 0x05C2) { return 1; }
+    if (cp >= 0x05C4 && cp <= 0x05C5) { return 1; }
+    if (cp == 0x05C7) { return 1; }
+    # Arabic
+    if (cp >= 0x0610 && cp <= 0x061A) { return 1; }
+    if (cp >= 0x064B && cp <= 0x065F) { return 1; }
+    if (cp == 0x0670) { return 1; }
+    if (cp >= 0x06D6 && cp <= 0x06DC) { return 1; }
+    if (cp >= 0x06DF && cp <= 0x06E4) { return 1; }
+    if (cp >= 0x06E7 && cp <= 0x06E8) { return 1; }
+    if (cp >= 0x06EA && cp <= 0x06ED) { return 1; }
+    # ZWJ — emoji sequence joiner
+    if (cp == 0x200D) { return 1; }
+    # Combining Diacritical Marks for Symbols
+    if (cp >= 0x20D0 && cp <= 0x20F0) { return 1; }
+    # Math-zone combiners (Combining Diacritical Marks Extended)
+    if (cp >= 0x1AB0 && cp <= 0x1ACE) { return 1; }
+    if (cp >= 0x1DC0 && cp <= 0x1DFF) { return 1; }
+    # Variation Selectors (VS-1..VS-16; VS-16 enables emoji form)
+    if (cp >= 0xFE00 && cp <= 0xFE0F) { return 1; }
+    # Combining Half Marks
+    if (cp >= 0xFE20 && cp <= 0xFE2F) { return 1; }
+    # Variation Selectors Supplement (VS-17..VS-256)
+    if (cp >= 0xE0100 && cp <= 0xE01EF) { return 1; }
+    return 0;
+}
+
+# Regional Indicator codepoints (U+1F1E6..U+1F1FF, A..Z). Two
+# consecutive RIs form a country-flag emoji as a single cluster
+# (🇺🇸 = US-EN regional indicator A + S). The filter loop tracks
+# state to pair them.
+fn cp_is_regional_indicator(cp) {
+    if (cp >= 0x1F1E6 && cp <= 0x1F1FF) { return 1; }
+    return 0;
+}
+
 # ---- anuenue_filter ------------------------------------------------
 #
 # The pipe-purity proof. Reads stdin in ANUENUE_READ_CHUNK chunks,
@@ -158,24 +318,75 @@ fn anuenue_filter(): i64 {
     }
 
     var pos = 0;                            # current write offset into line_buf
-    var phase = ANUENUE_PHASE_START;        # hue phase, advances per byte; M2 starting offset
+    var phase = ANUENUE_PHASE_START;        # current hue phase (= phase of current cluster)
     var rgb[24];                            # 3 × i64 slots — hsv_rainbow output
+
+    # Bytes carried over from the prior chunk because they formed
+    # the start of a UTF-8 sequence whose tail hadn't arrived yet.
+    # 0..3 — utf8_seq_len returns 0 only for sequences expecting up
+    # to 4 bytes, so at most 3 of those would be carry-bytes (the
+    # leading byte plus up to 2 continuations seen). Stored at the
+    # head of read_buf; the next file_read appends to read_buf +
+    # carry_len with a correspondingly shorter length.
+    var carry_len = 0;
+
+    # Regional-indicator pair state. When we see the first of two
+    # consecutive RI codepoints we open this latch; the second RI
+    # closes it and gets folded into the cluster (single phase
+    # advance for the flag). Any non-RI advance resets it.
+    var prev_unpaired_ri = 0;
+
+    # "Previous codepoint was ZWJ" latch. ZWJ (U+200D) makes the
+    # codepoint AFTER it part of the current cluster — UAX #29's
+    # emoji-ZWJ-sequence rule: family emoji 👨‍👩‍👧 = ONE cluster
+    # composed of 👨 + ZWJ + 👩 + ZWJ + 👧. Without this latch the
+    # post-ZWJ emoji would start a new cluster. Set right after
+    # emitting a ZWJ codepoint; consumed (cleared) on the next.
+    var prev_was_zwj = 0;
+
+    # Whether any prior cluster has been emitted. The phase advances
+    # *before* a new cluster, not after — so the first cluster sits
+    # at PHASE_START exactly, and each subsequent non-extending
+    # cluster bumps by STEP. saw_any = 0 suppresses the bump on the
+    # very first emit (which otherwise would over-advance by one).
+    var saw_any = 0;
 
     var go = 1;
     while (go == 1) {
-        var n = file_read(STDIN, read_buf, ANUENUE_READ_CHUNK);
-        if (n <= 0) {
-            # n == 0: clean EOF. n < 0: read error (return as exit code).
-            if (n < 0) {
-                # Flush whatever's queued before erroring so partial
-                # output isn't lost.
-                if (pos > 0) {
+        var n_read = file_read(STDIN, read_buf + carry_len, ANUENUE_READ_CHUNK - carry_len);
+        if (n_read < 0) {
+            # Read error. Flush whatever's queued so partial output
+            # isn't lost; exit non-zero.
+            if (pos > 0) {
+                pos = tty_sgr_reset_buf(line_buf, pos);
+                file_write(STDOUT, line_buf, pos);
+            }
+            return 1;
+        }
+        if (n_read == 0) {
+            # Clean EOF. Any carry_len bytes are a truncated multi-
+            # byte sequence that will never complete — emit them as
+            # single-byte clusters (graceful degradation per the M3
+            # roadmap rule "invalid UTF-8 bytes get cycled-byte-at-
+            # a-time, never panic").
+            var ci = 0;
+            while (ci < carry_len) {
+                if (saw_any == 1) { phase = phase + ANUENUE_PHASE_STEP; }
+                hsv_rainbow(phase, &rgb);
+                pos = tty_fg_rgb_buf(line_buf, pos,
+                                     load64(&rgb + 0),
+                                     load64(&rgb + 8),
+                                     load64(&rgb + 16));
+                store8(line_buf + pos, load8(read_buf + ci));
+                pos = pos + 1;
+                saw_any = 1;
+                if (pos + ANUENUE_FLUSH_RESERVE > ANUENUE_LINE_BUF) {
                     pos = tty_sgr_reset_buf(line_buf, pos);
                     file_write(STDOUT, line_buf, pos);
+                    pos = 0;
                 }
-                return 1;
+                ci = ci + 1;
             }
-            # Clean EOF — flush remainder and exit.
             if (pos > 0) {
                 pos = tty_sgr_reset_buf(line_buf, pos);
                 file_write(STDOUT, line_buf, pos);
@@ -185,46 +396,127 @@ fn anuenue_filter(): i64 {
             continue;
         }
 
+        # Total valid bytes in read_buf this iteration: carry from
+        # last chunk + what we just read.
+        var n = n_read + carry_len;
+        carry_len = 0;
+
+        # Inner walk. `in_chunk` flag pattern instead of `break` per
+        # the CLAUDE.md no-break-with-var rule.
         var i = 0;
-        while (i < n) {
+        var in_chunk = 1;
+        while (in_chunk == 1 && i < n) {
             var b = load8(read_buf + i);
 
             if (b == 10) {
-                # LF — close out the line. Reset SGR so the terminal
-                # doesn't inherit the last char's color across the
-                # newline (shell prompt re-displays with default fg),
-                # then emit the LF, then flush.
+                # LF — its own non-extending cluster. Pre-advance
+                # if any prior cluster exists (same rule as for any
+                # other non-extending codepoint), then reset SGR,
+                # emit the LF, flush the line, drop RI candidacy
+                # and the ZWJ latch (newline breaks any open
+                # ZWJ sequence).
+                if (saw_any == 1) { phase = phase + ANUENUE_PHASE_STEP; }
                 pos = tty_sgr_reset_buf(line_buf, pos);
                 store8(line_buf + pos, 10);
                 pos = pos + 1;
                 file_write(STDOUT, line_buf, pos);
                 pos = 0;
-                # Phase keeps advancing across the LF — the rainbow
-                # is a property of byte ordinal, not column position.
-                phase = phase + ANUENUE_PHASE_STEP;
+                saw_any = 1;
+                prev_unpaired_ri = 0;
+                prev_was_zwj = 0;
                 i = i + 1;
                 continue;
             }
 
-            # Non-LF: append fg escape + the byte itself.
-            hsv_rainbow(phase, &rgb);
-            var r = load64(&rgb + 0);
-            var g = load64(&rgb + 8);
-            var bch = load64(&rgb + 16);
-            pos = tty_fg_rgb_buf(line_buf, pos, r, g, bch);
-            store8(line_buf + pos, b);
-            pos = pos + 1;
-            phase = phase + ANUENUE_PHASE_STEP;
+            var seqlen = utf8_seq_len(read_buf, i, n);
+            if (seqlen == 0) {
+                # Multi-byte sequence truncated at chunk boundary.
+                # Defer remaining bytes to next read.
+                in_chunk = 0;
+                continue;
+            }
 
-            # Force-flush if the next character couldn't fit a worst-
-            # case escape + payload + trailing reset.
+            var cp = utf8_decode(read_buf, i, seqlen);
+
+            # Decide if this codepoint extends the previous cluster:
+            #   - Combining mark / ZWJ / VS (via cp_is_extending)
+            #   - First codepoint after a ZWJ (joins forward through
+            #     the ZWJ — the emoji-ZWJ-sequence rule)
+            #   - Second-half of a regional-indicator pair (flag)
+            var extending = 0;
+            if (cp_is_extending(cp) == 1) { extending = 1; }
+            if (prev_was_zwj == 1) { extending = 1; }
+            if (cp_is_regional_indicator(cp) == 1) {
+                if (prev_unpaired_ri == 1) { extending = 1; }
+            }
+
+            # Phase advance BEFORE emitting — applies to every non-
+            # extending cluster after the first. Result: cluster N
+            # always renders at PHASE_START + N*STEP, exactly the
+            # M1/M2 semantics for the ASCII-only case (one cluster
+            # per byte).
+            if (saw_any == 1) {
+                if (extending == 0) { phase = phase + ANUENUE_PHASE_STEP; }
+            }
+
+            # Emit the fg escape + all sequence bytes under one
+            # color. A multi-byte codepoint always renders as a
+            # contiguous run; the next escape is laid down at the
+            # next cluster boundary.
+            hsv_rainbow(phase, &rgb);
+            pos = tty_fg_rgb_buf(line_buf, pos,
+                                 load64(&rgb + 0),
+                                 load64(&rgb + 8),
+                                 load64(&rgb + 16));
+            var k = 0;
+            while (k < seqlen) {
+                store8(line_buf + pos, load8(read_buf + i + k));
+                pos = pos + 1;
+                k = k + 1;
+            }
+
+            saw_any = 1;
+
+            # Update ZWJ latch: cleared by default (consumed by
+            # this codepoint), then re-set if THIS codepoint is
+            # itself ZWJ.
+            prev_was_zwj = 0;
+            if (cp == 0x200D) { prev_was_zwj = 1; }
+
+            # Update RI-pair latch. RI codepoints toggle the latch
+            # in pairs; any non-extending, non-RI codepoint resets it.
+            if (cp_is_regional_indicator(cp) == 1) {
+                if (prev_unpaired_ri == 1) {
+                    prev_unpaired_ri = 0;     # pair closed
+                } else {
+                    prev_unpaired_ri = 1;     # pair opened
+                }
+            } else {
+                if (extending == 0) { prev_unpaired_ri = 0; }
+            }
+
+            # Force-flush if the next cluster's worst-case write
+            # wouldn't fit (escape + 4-byte sequence + reset).
             if (pos + ANUENUE_FLUSH_RESERVE > ANUENUE_LINE_BUF) {
                 pos = tty_sgr_reset_buf(line_buf, pos);
                 file_write(STDOUT, line_buf, pos);
                 pos = 0;
             }
 
-            i = i + 1;
+            i = i + seqlen;
+        }
+
+        # If the inner loop exited early on a truncated sequence,
+        # `i` points at its leading byte. Copy the trailing 1..3
+        # partial bytes to the head of read_buf so the next
+        # file_read appends after them.
+        if (i < n) {
+            carry_len = n - i;
+            var ji = 0;
+            while (ji < carry_len) {
+                store8(read_buf + ji, load8(read_buf + i + ji));
+                ji = ji + 1;
+            }
         }
     }
     return 0;

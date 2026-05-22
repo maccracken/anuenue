@@ -27,28 +27,68 @@ fi
 fail() { echo "golden-check: FAIL — $1" >&2; exit 1; }
 pass() { echo "  ok: $1"; }
 
-# Fixture: AGNOS-rainbow @ seed=100. Inputs documented inline so
-# the fixture is reproducible from this script alone — never rely
-# on tribal knowledge of how a committed .out was generated.
-EXPECTED="tests/golden/agnos-rainbow-s100.out"
+# Each fixture is reproducible from the inline command below —
+# never rely on tribal knowledge of how a committed .out was
+# generated. Add fixtures by appending another check_golden call.
 ACTUAL=$(mktemp)
 ACTUAL2=$(mktemp)
 trap 'rm -f "$ACTUAL" "$ACTUAL2"' EXIT INT TERM
 
-printf "AGNOS rainbow" | "$BIN" -s 100 > "$ACTUAL"
-if ! diff -q "$EXPECTED" "$ACTUAL" > /dev/null; then
-    echo "golden-check: DRIFT on $EXPECTED" >&2
-    echo "Expected ($(wc -c < "$EXPECTED") bytes):" >&2
-    xxd "$EXPECTED" | head -3 >&2
-    echo "Actual ($(wc -c < "$ACTUAL") bytes):" >&2
-    xxd "$ACTUAL" | head -3 >&2
-    fail "regenerate with: printf \"AGNOS rainbow\" | ./build/anuenue -s 100 > $EXPECTED"
-fi
-pass "$EXPECTED — bytes match (-s 100 produces $(wc -c < "$EXPECTED") bytes)"
+# check_golden <expected-path> <description> <regenerate-command>
+# The 3rd arg is `sh -c`-able and writes its output to $ACTUAL.
+check_golden() {
+    expected="$1"
+    desc="$2"
+    cmd="$3"
+    sh -c "$cmd" > "$ACTUAL"
+    if ! diff -q "$expected" "$ACTUAL" > /dev/null; then
+        echo "golden-check: DRIFT on $expected ($desc)" >&2
+        echo "Expected ($(wc -c < "$expected") bytes):" >&2
+        xxd "$expected" | head -3 >&2
+        echo "Actual ($(wc -c < "$ACTUAL") bytes):" >&2
+        xxd "$ACTUAL" | head -3 >&2
+        fail "regenerate with: $cmd > $expected"
+    fi
+    pass "$expected — bytes match ($desc, $(wc -c < "$expected") bytes)"
+}
 
-# Determinism: same invocation twice must produce byte-identical
-# output. Catches accidental introduction of non-determinism (RNG,
-# time, environment) that the single golden diff would let through.
+# Fixture 1 — v0.3.0 M2 baseline. ASCII path, default phase
+# step, seed=100. Diff against this catches regressions in HSV
+# geometry, escape framing, or the M3 cluster loop's ASCII
+# fast path.
+check_golden "tests/golden/agnos-rainbow-s100.out" \
+    "M2 baseline: ASCII -s 100" \
+    "printf 'AGNOS rainbow' | $BIN -s 100"
+
+# Fixture 2 — v0.4.0 M3 CJK. Two 3-byte CJK codepoints + ASCII.
+# Each CJK char is one cluster → one phase advance per char,
+# matching the byte-level rainbow cadence (one fg escape every
+# codepoint, three payload bytes per).
+check_golden "tests/golden/cjk-mixed-s0.out" \
+    "M3 CJK + ASCII -s 0" \
+    "printf '日本AGNOS' | $BIN -s 0"
+
+# Fixture 3 — v0.4.0 M3 combining diacritic. \"é\" as base 'e'
+# + combining acute U+0301 (two codepoints, one grapheme). Both
+# bytes render under a single fg escape; phase advances only when
+# the next non-extending codepoint arrives.
+check_golden "tests/golden/combining-s0.out" \
+    "M3 combining diacritic é + rainbow" \
+    "printf 'e\xCC\x81rainbow' | $BIN -s 0"
+
+# Fixture 4 — v0.4.0 M3 ZWJ + regional indicator. Family emoji
+# (👨 ZWJ 👩 ZWJ 👧) renders as ONE grapheme cluster (5 codepoints
+# → one phase advance). 🇺🇸 (two regional indicators) also one
+# cluster. Stresses both the ZWJ-extending latch and the RI-pair
+# latch in one input.
+check_golden "tests/golden/zwj-flag-s0.out" \
+    "M3 ZWJ family + RI flag" \
+    "printf '👨\xE2\x80\x8D👩\xE2\x80\x8D👧🇺🇸' | $BIN -s 0"
+
+# Determinism cross-check: same invocation twice must produce
+# byte-identical output. Catches accidental non-determinism (RNG,
+# time, environment) that the single-fixture diff would let pass.
+printf "AGNOS rainbow" | "$BIN" -s 100 > "$ACTUAL"
 printf "AGNOS rainbow" | "$BIN" -s 100 > "$ACTUAL2"
 diff -q "$ACTUAL" "$ACTUAL2" > /dev/null \
     || fail "non-deterministic: two runs with the same seed produced different output"

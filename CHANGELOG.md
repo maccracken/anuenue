@@ -4,6 +4,84 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **M3 — UTF-8 Grapheme Awareness.** Filter cycles by Unicode
+  *cluster*, not byte. Multi-byte UTF-8 codepoints get one phase
+  advance instead of N (`日` doesn't render as three rainbow
+  segments); combining marks fold into their base codepoint (`é`
+  = e + ◌́ at one phase); emoji ZWJ sequences render as a single
+  cluster (👨‍👩‍👧 = one phase advance); regional-indicator pairs
+  collapse to one cluster (🇺🇸 = one phase advance). The M1 ASCII
+  path stays byte-identical — the v0.3.0 -s 100 golden fixture
+  remains green.
+- **UTF-8 primitives in `src/filter.cyr`**:
+  - `utf8_seq_len(buf, i, n)` — 1/2/3/4-byte sequence detection.
+    Returns 1 on invalid leading byte or invalid continuation
+    (graceful degradation — the byte gets cycled as a singleton);
+    returns 0 when a multi-byte sequence is truncated at the
+    chunk boundary (carry signal).
+  - `utf8_decode(buf, i, seqlen)` — assembles the codepoint from
+    the validated sequence bytes.
+  - `cp_is_extending(cp)` — practical-subset combining-mark
+    classifier: Latin/Cyrillic/Hebrew/Arabic combiners + ZWJ + VS
+    + half marks + math-zone combiners + variation selector
+    supplement. Documents the trade vs full UAX #29 inline.
+  - `cp_is_regional_indicator(cp)` — flag-pair recognition.
+- **Chunk-boundary carry**. A multi-byte sequence that straddles
+  the 4 096-byte read boundary is split correctly: the partial
+  bytes carry over to the head of `read_buf`, and the next
+  `read(2)` appends after them. EOF with carry → graceful
+  per-byte cycling (the truncated sequence will never complete).
+- **Cluster state machine** in `anuenue_filter`. Three latches:
+  `saw_any` (suppress pre-advance on the very first cluster),
+  `prev_was_zwj` (the codepoint after ZWJ joins the cluster —
+  emoji-ZWJ-sequence rule), `prev_unpaired_ri` (pair regional
+  indicators into flag emoji).
+- **30 new assertions across 5 new groups** in
+  `tests/anuenue.tcyr`: `utf8_seq_len` 1/2/3/4-byte detection,
+  invalid + truncated handling, `utf8_decode` canonical codepoints
+  (é / 日 / 🌈), `cp_is_extending` coverage (combining marks,
+  ZWJ, VS, half marks, math zone, VS supplement, non-extending
+  controls), `cp_is_regional_indicator` range bounds.
+- **Three new golden fixtures** in `tests/golden/`:
+  - `cjk-mixed-s0.out` — `日本AGNOS` at seed 0 (CJK + ASCII)
+  - `combining-s0.out` — `é + rainbow` (combining diacritic)
+  - `zwj-flag-s0.out` — `👨‍👩‍👧🇺🇸` (ZWJ + RI cluster stress)
+  `scripts/golden-check.sh` refactored into a `check_golden`
+  helper; all four fixtures asserted by CI's Golden output step.
+
+### Changed
+
+- `ANUENUE_FLUSH_RESERVE` bumped from 22 → 32 to fit a 4-byte
+  codepoint's worst-case render envelope (19-byte fg escape + 4
+  payload bytes + 4-byte reset). M1/M2's 22 was sized for 1-byte
+  payloads only.
+- `anuenue_filter` walks UTF-8 sequences instead of bytes; LF
+  detection is a fast-path leading-byte check before
+  `utf8_seq_len` runs. ASCII branch is preserved (single-byte
+  cluster, advance phase).
+
+### Performance
+
+- **ASCII path slower** — ~86 ns/byte vs v0.3.0's 53 ns/byte
+  (~62% regression on the M2 baseline) due to per-codepoint
+  cluster classification. UTF-8 corpus runs comparable per-byte
+  (~77 ns) since multi-byte codepoints amortise the per-cluster
+  work over 2–4 payload bytes.
+- **DCE binary** — 322 368 bytes (+5 152 vs v0.3.0).
+- Both metrics tracked in `docs/benchmarks.md`. M5 (perf pass,
+  v0.6.0) targets recovering the ASCII hot-path cost.
+
+### Evaluated and rejected
+
+- **vyakarana dep** — the roadmap M3 entry listed vyakarana as a
+  candidate for grapheme-cluster boundary detection. Investigation
+  showed vyakarana is a **source-code tokenizer** (token-kind spans
+  for syntax highlighting via CYML grammars), not a Unicode
+  database. Wrong domain. anuenue ships an inline practical-subset
+  classifier instead; ADR 0003 (M7) will record the trade.
+
 ## [0.3.0] — 2026-05-21 — M2: Flag Surface
 
 lolcat-equivalent CLI lands. Five flags (`-h`/`-V`/`-p`/`-s`/`-F`)
