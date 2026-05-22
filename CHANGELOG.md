@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-21 — M3: UTF-8 Grapheme Awareness
+
+The Unicode-correct-by-default cut. Filter cycles by grapheme
+*cluster*, not byte: multi-byte CJK / combining marks / emoji-ZWJ
+sequences / regional-indicator flag pairs all advance phase once
+per visible glyph, not once per UTF-8 byte. ASCII fast-path stays
+byte-identical (v0.3.0's `-s 100` golden remains green). Practical-
+subset classifier — ships ~18 combining-mark ranges + ZWJ + VS + RI;
+Hangul L/V/T and some Brahmic spacing marks misclassify as advancing
+(errs on "more rainbow, not less"). ADR 0003 (M7) will record the
+trade vs full UAX #29. Invalid UTF-8 → graceful per-byte degradation
+(never panics). Chunk-boundary carry handles 4 096-byte read splits.
+
 ### Added
 
 - **M3 — UTF-8 Grapheme Awareness.** Filter cycles by Unicode
