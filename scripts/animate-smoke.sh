@@ -101,12 +101,17 @@ trap 'rm -f "$OUT" "$LONG_OUT"' EXIT INT TERM
 # Post-fix: mid-cluster flush splits the write across multiple
 # file_write calls. Single-frame run (-d 0 + SIGINT) keeps the
 # captured output bounded for the byte-count assertion.
+#
+# `\NNN` octal escapes (not `\xNN` hex) for printf — POSIX
+# `printf(1)` requires the octal form; dash + busybox-sh ignore
+# `\xNN`, which silently produces no combining bytes and a
+# misleading "no overflow" pass. (Caught in CI under dash.)
 (
     {
         printf 'A'
         i=0
         while [ "$i" -lt 16000 ]; do
-            printf '\xcc\x81'
+            printf '\314\201'
             i=$((i + 1))
         done
     } | "$BIN" --color=24bit -a -d 1 > "$LONG_OUT" 2>&1

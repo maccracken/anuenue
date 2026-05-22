@@ -65,6 +65,23 @@ findings open at the end of the audit (see
 - **`docs/adr/README.md`** — index populated; previous "no ADRs
   yet" placeholder replaced by the three-row table above.
 
+### Fixed
+
+- **`scripts/animate-smoke.sh` — POSIX-printf portability.** The
+  M8 long-cluster regression initially used `printf '\xcc\x81'`
+  to emit the U+0301 combining acute. `\xNN` hex escapes are a
+  bash extension; POSIX `printf(1)` requires `\NNN` octal. CI
+  runs the smoke test under dash, which ignored the hex form
+  silently — the smoke loop sent ASCII `\xcc\x81` text instead
+  of the combining-acute bytes, so the byte-preservation
+  assertion counted zero combiners and failed the run with a
+  misleading "mid-cluster flush dropped bytes?" message.
+  Switched to the POSIX octal form (`printf '\314\201'`); bash
+  + dash + busybox-sh all interpret it as the two bytes 0xCC
+  0x81. Test result unchanged on bash; CI under dash now
+  receives the correct adversarial input and exercises the
+  mid-cluster flush guard as intended.
+
 ### Security
 
 - **HIGH (fixed in this cut)**: `_render_frame` heap overflow on
