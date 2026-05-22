@@ -5,9 +5,30 @@
 
 ## Version
 
-**0.9.0** — *current.* cut 2026-05-22 (tenth release; sixth same-
-day cut). **Quality slot — fuzz harness + animation smoke
-breadth + structural cleanup.** No behavioural changes, no flag-
+**1.0.0** — **GA.** Tagged 2026-05-22 on user signal — the
+eleventh release, two calendar days after the `cyrius init anuenue`
+scaffold. The public API contract (flag set, exit codes, capability
+surface, output shape) is frozen for the v1.x line.
+
+8 of 10 v1.0 acceptance criteria met at tag (see
+[roadmap.md § v1.0 Criteria](roadmap.md#v10-criteria)); **Dogfooded**
+and **Downstream gate** are deferred to post-1.0 organic adoption.
+Both block on external consumer wiring — `agnoshi` MOTD pipeline
+composition or `iam`'s default login splash are the anticipated
+first consumers. The v1.0 *contract* is frozen; *adoption* is not
+a contract property the project can satisfy unilaterally, and
+shipping v1.0 is what gives consumers the stable target they need
+to build against.
+
+No behavioural changes vs v0.9.0; no dep bumps; DCE binary
+**351,200 B unchanged**. The cut is a symbolic crystallisation —
+everything that made it into v0.9.0 *is* v1.0, just with the API-
+freeze contract attached. Sandhi-bump cadence continues within
+v1.x; breaking surface changes earn v2.0.
+
+**0.9.0** — cut 2026-05-22 (tenth release; sixth same-day cut).
+**Quality slot — fuzz harness + animation smoke breadth +
+structural cleanup.** No behavioural changes, no flag-
 surface changes, no dep bumps. Three threads landed together:
 
 1. **`fuzz/` directory populated.** Five harnesses targeting the
@@ -156,14 +177,22 @@ filter — pure scaffold release.
 
 ## Phase
 
+**v1.0.0 GA — tagged 2026-05-22.** API contract frozen for the
+v1.x line. Maintenance + organic-adoption phase opens: patch cuts
+fix what consumers find; minor cuts add non-breaking surface;
+v2.0 is reserved for breaking changes. Sandhi-bump cadence
+continues — darshana / sakshi / agnostik bumps follow the
+proposal → swap → goldens-unchanged pattern established
+through v0.7.1's three turns of the darshana 0.5.x crank.
+
+The two open v1.0 acceptance items (Dogfooded + Downstream gate)
+are anticipated to close as `agnoshi` MOTD chain and `iam` login
+splash land their first integrations. Neither blocks the GA tag;
+both are organic-adoption work the v1.0 contract makes tractable.
+
 **Quality slot (v0.9.0) — shipped.** Fuzz harness, animation
 smoke breadth, structural cleanup. See the v0.9.0 entry under
-Version above for the per-thread breakdown. No behavioural surface
-delta vs v0.8.0; the production binary is byte-identical in size.
-With both quality carry-forwards closed (fuzz + animation non-
-truecolor), the only outstanding pre-v1.0 work is the consumer
-soak window — both Dogfooded and Downstream gate need an external
-consumer wiring anuenue in for a minor-cycle window.
+Version above for the per-thread breakdown.
 
 **M7 (docs) + M8 (audit) — shipped at v0.8.0.** Doc half of the
 v1.0 surface lock + the pre-v1.0 security pass, landed in one
@@ -256,26 +285,26 @@ in for a minor-cycle soak window. Tagged on user signal per
 | `src/version_str.cyr` | ~18 | **AUTO-GENERATED** by `scripts/version-bump.sh`. Holds `_VERSION_STR_ANUENUE` + `_VERSION_LEN_ANUENUE`. Never hand-edit; CI's Version consistency step asserts the literal matches `VERSION`. |
 | `src/test.cyr` | 12 | top-level test entry stub (referenced by `cyrius.cyml [build].test`). Actual tests live in `tests/anuenue.tcyr`. |
 
-The third file the M0 plan anticipated (`src/hsv.cyr`) still
-hasn't earned a split — `hsv_rainbow` is ~30 lines and lives in
-`filter.cyr`. M3 added the UTF-8 / cluster surface to `filter.cyr`
-without crowding it; M4 added a new `animate.cyr` rather than
-bloating filter.cyr further (cluster pre-tag + frame loop are a
-distinct concern from the streaming filter). M5 (perf pass) may
-still pull HSV out into `src/hsv.cyr` if a phase-cached escape
-buffer wants to live next to the geometry.
+The M0-anticipated `src/hsv.cyr` split landed at v0.9.0 (the fuzz
+harness's `emit-phase-esc` target was the second consumer that
+finally earned it). Source-file layout is now stable at v1.0;
+post-1.0 splits would need new domain pulls (e.g. a sibling
+pipe-decorator extracting shared code into the AGNOS shared-crates
+registry, post-v1.x).
 
 ## Binary
 
-- **Size (0.9.0, DCE on)**: **351 200 bytes** (~343 KB). Delta vs
-  0.8.0: **±0 bytes** — v0.9.0 added fuzz/ + smoke variants +
-  the hsv.cyr split, but none of that work touched the
-  production binary surface (DCE resolves the same reachable
-  function set; moving `hsv_rainbow` between files doesn't
-  change linkage). Cleanest possible quality-slot signal.
+- **Size (1.0.0, DCE on)**: **351 200 bytes** (~343 KB). Delta vs
+  0.9.0: **±0 bytes** — v1.0.0 is a symbolic GA crystallisation
+  of v0.9.0's surface, no binary changes. Delta vs 0.8.0: also
+  ±0 (the quality slot at v0.9.0 didn't touch the production
+  binary either).
 - **DCE elimination**: 1 240 unreachable fns, 219 668 bytes NOPed.
-- **Cap discipline (v0.7.1+)**: **512 KB**. Current headroom ~161 KB.
-- **Prior floors**: 0.8.0 = 351 200 B, 0.7.1 = 350 488 B, 0.7.0 = 349 832 B, 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
+- **Cap discipline (v1.0.0+)**: **512 KB**. The cap's role
+  remains regression detection — minor cuts within v1.x must
+  record DCE size and re-check the cap fires meaningfully.
+  Current headroom ~161 KB.
+- **Prior floors**: 0.9.0 = 351 200 B, 0.8.0 = 351 200 B, 0.7.1 = 350 488 B, 0.7.0 = 349 832 B, 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
 - **Output path**: `build/anuenue`
 
 ## Tests
@@ -322,31 +351,31 @@ Anticipated at v0.7+:
 
 ## Carry-Forward
 
-- **M7 docs — closed at v0.8.0.** ADRs 0001/0002/0003,
-  integration guide, eight examples, `print_usage` Examples
-  refresh all shipped. Carry-forward note retired.
-- **M8 audit — closed at v0.8.0.** Audit doc filed at
-  [`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md);
-  the HIGH finding (long-cluster heap overflow in `_render_frame`)
-  is fixed; the LOW (large `-d` overflow → graceful exit) is
-  documented as accepted graceful degradation; INFO findings
-  (signalfd lifecycle, signal mask not restored, color override
-  parser robustness) are recorded for future reference. Capability
-  surface confirmed clean and recorded as the v1.0 baseline.
-  Carry-forward note retired.
-- **Fuzz harness — closed at v0.9.0.** Five harnesses live in
-  `fuzz/`. Combined 1 354 580 assertions across deterministic
-  seed sweeps; CI-gated via `cyrius fuzz`. Carry-forward retired.
-- **Animation under non-truecolor modes — closed at v0.9.0.**
-  `scripts/animate-smoke.sh` now covers `--color=256` and
-  `--color=16` under `-a` with full cursor-lifecycle + SGR-shape
-  assertions. Carry-forward retired.
-- **Dogfooded + Downstream gate (v1.0 acceptance)** — the
-  remaining two v1.0 criteria need at least one external
-  consumer wiring anuenue in for a minor-cycle soak window.
-  Anticipated consumers: `agnoshi` MOTD pipeline composition or
-  `iam`'s default login splash chain. Tracking until then.
+Pre-1.0 carry-forwards all retired at the GA cut. The list below
+captures what's open *for the v1.x line*.
+
+- **Dogfooded + Downstream gate (v1.0 acceptance — deferred).**
+  The two acceptance items left open at GA. Both block on
+  external consumer wiring (`agnoshi` MOTD chain, `iam` login
+  splash). Track until the first integration lands; close as
+  retroactive acceptance once a consumer is green against v1.x
+  for at least one minor cycle.
+- **Sandhi cadence within v1.x.** darshana / sakshi / agnostik
+  bump-cycles continue to follow the proposal → swap →
+  goldens-unchanged → cap re-evaluated pattern. The darshana
+  0.5.1 → 0.5.2 → 0.5.3 sequence (M1 / M4 / M6 closeout) is the
+  reference. Re-evaluate pin lag at each minor cut.
+- **Anuenue's audit doc cadence.** Re-run the security audit at
+  every minor cut within v1.x; record findings as a delta vs
+  `docs/audit/2026-05-22-audit.md`. INFO findings from that
+  initial audit (signalfd lifecycle on animation exit, signal
+  mask not restored after animation completion, large `-d`
+  graceful-exit boundary at ~292 years) stay accepted unless a
+  consumer reports a concrete regression.
 
 ## Next
 
-See [roadmap.md § v1.0.0](roadmap.md#v100--ga).
+The v1.0 GA tag is the project's first stable-API release. The
+next slot is **post-v1.0 maintenance + organic consumer
+adoption** — see [roadmap.md § v1.0.0 — GA](roadmap.md#v100--ga)
+for the framing.

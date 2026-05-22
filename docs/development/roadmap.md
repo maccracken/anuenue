@@ -12,7 +12,11 @@ Position in the AGNOS userland: founder of the **pipe-decorator family** (see [s
 
 ## v1.0 Criteria
 
-Tagged when **all** of the following hold:
+**v1.0.0 tagged 2026-05-22 on user signal — 8 of 10 met.** The
+two deferred items (Dogfooded + Downstream gate) block on external
+consumer wiring (`agnoshi` MOTD or `iam` login splash); they're
+adoption properties the project can't satisfy unilaterally and
+are tracked post-1.0. The full criterion list:
 
 - [x] **Public CLI surface frozen** — every flag documented, every flag exercised in tests, every flag behavior matches docs *— shipped at M7 / v0.8.0; refreshed `print_usage`, three ADRs (0001/0002/0003), `docs/guides/integrating-anuenue.md`, and eight runnable examples land the contract*
 - [x] **UTF-8 correct by default** — grapheme-cluster aware cycling (Ruby lolcat got this wrong; AGNOS ships it right) *— shipped at M3 / v0.4.0; practical-subset classifier, ADR 0003 (M7) records the trade vs full UAX #29*
@@ -20,10 +24,10 @@ Tagged when **all** of the following hold:
 - [x] **Color-mode negotiation** — 24-bit / 256-color / 16-color / monochrome fallback per `TERM` + `COLORTERM` *— shipped at M6 / v0.7.0; four-mode taxonomy with priority chain, override via `--color <mode>`*
 - [x] **Animation parity with `lolcat -a`** — cursor positioning, frame timing, signal-safe (SIGINT restores cursor) *— shipped at M4 / v0.5.0; non-blocking signalfd probe between frames, `tty_cursor_up` re-anchor, 16 ms frame interval*
 - [x] **Per-character overhead measured** — benchmark showing the cost vs `cat`, tracked in `docs/benchmarks.md` *— M5 (v0.6.0) shipped scripts/perf-bench.sh as the ratchet; ASCII no-LF at 47 ns/byte, below the v0.3.0 53 ns/byte floor*
-- [ ] **Dogfooded** in real AGNOS pipelines (`iam | anuenue` MOTD; `bnrmr | anuenue` banners) for at least one minor-cycle window *(blocked on first consumer wiring, anticipated post-M6)*
+- [ ] **Dogfooded** in real AGNOS pipelines (`iam | anuenue` MOTD; `bnrmr | anuenue` banners) for at least one minor-cycle window *— deferred to post-1.0; blocks on first external-consumer wiring (`agnoshi` MOTD chain or `iam` login splash anticipated)*
 - [x] **Security audit pass** — `docs/audit/YYYY-MM-DD-audit.md` clean; specific checks for stdin-bytes-as-untrusted and buffer-bounds on the line buffer *— shipped at M8 / v0.8.0; [`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md), 1 HIGH (fixed in-cycle: `_render_frame` long-cluster heap overflow), 1 LOW + 8 INFO; zero HIGH+ open at the audit close*
 - [x] **CHANGELOG complete** from v0.1.0 onward *— all eight cuts (v0.1.0 → v0.7.1) sectioned; maintained at every cut*
-- [ ] **Downstream gate**: at least one consumer green (likely `agnoshi` MOTD pipeline or `iam`'s default chain) *(see Dogfooded above — same blocker)*
+- [ ] **Downstream gate**: at least one consumer green (likely `agnoshi` MOTD pipeline or `iam`'s default chain) *— deferred to post-1.0; same blocker as Dogfooded above*
 
 ## Dependency Map
 
@@ -45,28 +49,26 @@ Explicitly **not** wired (evaluated and rejected for v1.0):
 
 ## Current focus
 
-**Next slot: v1.0.0 — GA tag.** Surface frozen at v0.8.0;
-capability baseline recorded by the M8 audit; documentation set
-complete; eight prior cuts gated by tests + goldens + animate-
-smoke + perf-bench. The two remaining v1.0 acceptance items are
-*Dogfooded* and *Downstream gate* — both blocked on at least one
-external consumer (likely `agnoshi` MOTD pipeline or `iam`)
-wiring anuenue in for a minor-cycle soak window. Tagged on user
-signal per
-[feedback_no_unprompted_version_bumps](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_no_unprompted_version_bumps.md).
+**v1.0.0 GA — shipped 2026-05-22.** The public API contract is
+frozen for the v1.x line. The project enters its
+maintenance + organic-adoption phase: patch cuts fix what
+consumers find; minor cuts add non-breaking surface; v2.0 is
+reserved for breaking changes.
 
 **Shipped:** M0 (v0.1.0) → M1 (v0.2.0) → M2 (v0.3.0) → M3 (v0.4.0)
 → M4 (v0.5.0) → M5 (v0.6.0) → M6 (v0.7.0) → sandhi closeout
-(v0.7.1) → M7 (docs) + M8 (audit) (v0.8.0) → **quality slot
-(v0.9.0)**. See the per-milestone entries below for delivered
-surface.
+(v0.7.1) → M7 (docs) + M8 (audit) (v0.8.0) → quality slot
+(v0.9.0) → **v1.0.0 GA**. Eleven releases across two calendar
+days (2026-05-21 / 2026-05-22). See the per-milestone entries
+below for delivered surface.
 
-**Remaining to v1.0:** consumer soak window → v1.0.0 tag on
-user signal.
+**Post-v1.0:** maintenance + organic adoption. Two deferred
+v1.0 acceptance items (Dogfooded + Downstream gate) close once
+an external consumer is green. See [§ Post-v1.0](#post-v10--maintenance--organic-adoption).
 
 ## Milestones
 
-### Shipped — M0 through M8
+### Shipped — M0 through v1.0.0
 
 Full per-cut narratives live in [`CHANGELOG.md`](../../CHANGELOG.md);
 this table is just the index.
@@ -83,10 +85,37 @@ this table is just the index.
 | v0.7.1   | Sandhi closeout                 | darshana 0.5.3 swap (`tty_isatty` / `tty_sgr_buf` / `tty_fg_256_buf`); stand-ins removed; DCE cap raised 350 → 512 KB.   |
 | v0.8.0   | M7 + M8 — Docs + Audit          | Three ADRs (pipe-purity / HSV-inline / grapheme-cluster), integration guide, 8 examples, refreshed `print_usage`. M8 audit found + fixed one HIGH (`_render_frame` long-cluster heap overflow); zero HIGH+ open. |
 | v0.9.0   | Quality slot                    | `fuzz/` populated with 5 harnesses (1.35M assertions, CI-gated). `animate-smoke.sh` extended to `--color=256` + `--color=16`. M0-anticipated `src/hsv.cyr` split landed. 5 pre-existing main.cyr lint warnings cleared. DCE binary byte-identical at 351 200 B. |
+| **v1.0.0** | **GA**                        | Public API contract frozen for the v1.x line. 8 of 10 v1.0 acceptance criteria met at tag; Dogfooded + Downstream gate deferred to post-1.0 organic adoption. DCE binary 351 200 B unchanged from v0.9.0. |
 
-### v1.0.0 — GA
+### v1.0.0 — GA (shipped 2026-05-22)
 
-Public API contract frozen. Dep pins set for the v1.x line. Dogfood-soak window proven. Tagged on user-driven release per [feedback_no_unprompted_version_bumps](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_no_unprompted_version_bumps.md).
+Public API contract frozen for the v1.x line. Dep pins set
+(darshana 0.5.3 / sakshi 2.2.5 / agnostik 1.2.2 / Cyrius 6.0.1).
+Tagged on user signal per
+[feedback_no_unprompted_version_bumps](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_no_unprompted_version_bumps.md).
+
+**Acceptance scorecard** (8/10 met at tag): see the table in
+[v1.0 Criteria](#v10-criteria) above. The two deferred items
+(Dogfooded + Downstream gate) close once at least one external
+consumer (`agnoshi` MOTD or `iam` login splash) is green against
+v1.x for a minor-cycle window. Both are post-1.0 organic-adoption
+work — the v1.0 *contract* is what makes adoption tractable, and
+shipping that contract is the project deliverable.
+
+### Post-v1.0 — maintenance + organic adoption
+
+- **API stable.** Breaking changes require v2.0. Sandhi bumps
+  within v1.x update internal helpers / perf surface but not the
+  documented user contract.
+- **Patch cuts** (`1.0.x`) fix what consumers find.
+- **Minor cuts** (`1.x.0`) add non-breaking surface or close the
+  remaining v1.0 acceptance items once consumers land.
+- **Sandhi cadence** continues — `darshana` / `sakshi` /
+  `agnostik` bumps follow the proposal → swap → goldens-unchanged
+  pattern. The darshana 0.5.1 → 0.5.2 → 0.5.3 sequence (M1 / M4 /
+  M6 closeout) is the reference.
+- **Audit cadence:** re-run the security audit at each minor cut;
+  record as a delta vs [`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md).
 
 ## Out of Scope (for v1.0)
 

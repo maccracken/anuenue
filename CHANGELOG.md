@@ -4,6 +4,94 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-05-22
+
+**GA.** anuenue v1.0.0 — the Cyrius-native rainbow pipe filter,
+founder of the AGNOS pipe-decorator family. Tagged on user signal
+per [feedback_no_unprompted_version_bumps](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_no_unprompted_version_bumps.md).
+The public API contract — flag set, exit codes, capability surface,
+output shape — is frozen for the v1.x line. Sandhi bumps within v1.x
+will follow the established darshana 0.5.x cadence (proposal → swap →
+goldens unchanged → cap re-evaluated).
+
+Scaffolded `cyrius init anuenue` 2026-05-21; ten releases landed
+across two calendar days. The v1.0 contract:
+
+| Surface | Shape |
+|---------|-------|
+| **Input** | stdin only. UTF-8 decoded; invalid sequences degrade per byte ([ADR 0003](docs/adr/0003-grapheme-cluster-cycling.md)). |
+| **Output** | stdout: input bytes tinted with ANSI fg escapes. stderr: usage + errors only. ANSI fg only — no bold / italic / underline ([ADR 0001](docs/adr/0001-pipe-purity.md)). |
+| **Flags** | `-h` / `-V` / `-p` / `-s` / `-F` / `-a` / `-d` / `-S` / `-n` / `-C` / `-c` (11 total). Every flag documented in `docs/guides/`; every flag exercised in `tests/anuenue.tcyr`; every flag behaviour matches docs (M7 surface freeze). |
+| **Exit codes** | 0 success (incl. `--help` / `--version`); 1 runtime error; 2 usage error. |
+| **Capability surface** | `read(0)` / `write(1,2)` / `brk` / `exit` / bounded `open` + `close` (for `/proc/self/cmdline` + `/proc/self/environ`) / `ioctl(TIOCGWINSZ)` via darshana / animation-only `rt_sigprocmask` + `signalfd4` + `nanosleep`. No `sys_system`, no `fork`, no `execve`, no `socket`, no `connect`. Documented exhaustively in [`docs/audit/2026-05-22-audit.md`](docs/audit/2026-05-22-audit.md) § Finding 2. |
+| **Colour modes** | TRUECOLOR / COLOR_256 / COLOR_16 / MONO selected via the priority chain: `--color <mode>` → `--no-color` → `NO_COLOR` env → stdout-not-TTY (unless `--force-color`) → `COLORTERM` → `TERM`. MONO is a true `cat`-shaped byte-identical passthrough. |
+| **HSV phase model** | Integer 6-sector S=V=1 rainbow (`src/hsv.cyr`); 1530-unit phase space; no floating point anywhere ([ADR 0002](docs/adr/0002-hsv-inline-not-abaco.md)). |
+| **Grapheme classifier** | Practical-subset extending-codepoint table (21 ranges); ZWJ + RI latches; explicit Hangul/Devanagari/tag-sequence trade-offs documented ([ADR 0003](docs/adr/0003-grapheme-cluster-cycling.md)). |
+| **Animation** | `-a` / `-d <s>` / `-S <speed>`; 64 KB input cap; 16 ms frame interval; non-blocking signalfd for clean SIGINT cursor restore. |
+| **Performance** | 45–50 ns/byte ASCII no-LF (M5 acceptance ≤60 ns/byte); 41 ns/byte UTF-8 mixed. |
+
+### v1.0 acceptance — final scorecard
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | Public CLI surface frozen | ✅ M7 / v0.8.0 |
+| 2 | UTF-8 correct by default | ✅ M3 / v0.4.0 |
+| 3 | TTY-aware | ✅ M6 / v0.7.0; sandhi closeout v0.7.1 |
+| 4 | Color-mode negotiation | ✅ M6 / v0.7.0 |
+| 5 | Animation parity with `lolcat -a` | ✅ M4 / v0.5.0 |
+| 6 | Per-character overhead measured | ✅ M5 / v0.6.0 |
+| 7 | Dogfooded in real AGNOS pipelines | ⏸ deferred to post-1.0 organic adoption |
+| 8 | Security audit pass | ✅ M8 / v0.8.0 — 1 HIGH (fixed in-cycle), zero HIGH+ open |
+| 9 | CHANGELOG complete | ✅ maintained at every cut |
+| 10 | Downstream gate (consumer green) | ⏸ deferred to post-1.0 organic adoption |
+
+8/10 met at tag time. The two open items both block on external
+consumer wiring (anticipated: `agnoshi` MOTD pipeline composition or
+`iam`'s default login splash). Both are post-1.0 organic-adoption
+work — the v1.0 *contract* is frozen, *adoption* is not a contract
+property the project itself can satisfy unilaterally. The contract
+freeze is what makes adoption tractable; v1.0 ships so consumers can
+build against a stable target.
+
+### Quality bar at v1.0.0
+
+| Gate | Number |
+|------|--------|
+| Unit assertions (`tests/anuenue.tcyr`) | 245 across 36 groups |
+| Golden fixtures + equivalence checks | 10 byte-identical fixtures + checks |
+| Animation smoke checks | 18 structural assertions |
+| Fuzz assertions (`fuzz/*.fcyr`) | 1,354,580 per run across 5 harnesses |
+| Security audit HIGH+ findings open | 0 |
+| DCE binary size | 351,200 B (~343 KB) |
+| Cyrius lint warnings | 0 across all 6 source files |
+
+### Dependencies pinned for v1.x
+
+| Dep | Tag | Note |
+|-----|-----|------|
+| `darshana` | 0.5.3 | ANSI escape primitives. Sandhi cycle 0.5.1 → 0.5.2 → 0.5.3 established the proposal pattern; v1.x follows same cadence on future bumps. |
+| `sakshi` | 2.2.5 | Errors / tracing. AGNOS first-party-standards-required. |
+| `agnostik` | 1.2.2 | Result / Error shapes. |
+| Cyrius stdlib | 6.0.1 (toolchain pin) | `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `flags`, `chrono`. |
+
+### Post-v1.0 expectations
+
+- **API contract frozen** for v1.x. Breaking changes get a v2.0
+  bump; sandhi bumps within v1.x can update internal helpers /
+  perf surface but not the user-visible contract above.
+- **Sandhi cadence** continues — darshana / sakshi / agnostik
+  bumps get the proposal → swap → goldens-unchanged pattern that
+  ran three times for darshana through v0.7.1.
+- **Adoption is organic.** `agnoshi` MOTD chain and `iam` login
+  splash are the anticipated first consumers; v1.x patch cuts will
+  fix anything those find. The contract is stable for them to
+  build against.
+- **Fuzz harness** stays in CI. Each new fuzz target opens a new
+  `fuzz/*.fcyr` file; existing harnesses don't change unless
+  their target surface changes.
+
+The brand IS the rainbow. ānuenue.
+
 ## [0.9.0] — 2026-05-22
 
 Post-v0.8.0 quality slot — no behavioural changes, no flag-surface
