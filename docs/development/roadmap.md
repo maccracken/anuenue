@@ -56,19 +56,20 @@ Explicitly **not** wired (evaluated and rejected for v1.0):
 
 **Acceptance**: `cyrius build` succeeds, `cyrius test` passes, README is the AGNOS-style first impression.
 
-### M1 — Minimum Viable Filter (v0.2.0)
+### M1 — Minimum Viable Filter (v0.2.0) — ✅ shipped 2026-05-21
 
 The pipe-purity proof: stdin → stdout, byte-level cycling, 24-bit ANSI via darshana. No flags. No animation. No UTF-8 cluster awareness. Just the core loop.
 
-- Read stdin to EOF in line-sized chunks (line buffer bounded; bound documented)
-- For each byte position, compute HSV phase → RGB tuple (inline `hsv2rgb`)
-- Emit `darshana::ansi::fg_rgb(r, g, b)` before each byte; emit `darshana::ansi::reset()` at line end
-- Pipe-purity: zero file I/O, zero network, zero fork/exec, zero state on disk
-- First benchmark in `docs/benchmarks.md` — per-character overhead vs `cat`
+Shipped surface:
 
-**Acceptance**: `echo "AGNOS" | ./build/anuenue` renders rainbow ASCII; `cat largefile | ./build/anuenue > /dev/null` doesn't OOM; bench captured.
+- `src/filter.cyr` — `hsv_rainbow(phase, out_rgb)` (integer 6-sector geometry over a 1530-unit phase space) + `anuenue_filter()` (stdin→stdout loop with LF-flush + force-flush). `src/main.cyr` is the entrypoint shell.
+- Emits via darshana 0.5.1's new `tty_fg_rgb_buf` + `tty_sgr_reset_buf` — composed into a 32KB line buffer for one write(2) per line; force-flush when next-character worst-case would exceed the 22-byte reserve.
+- 47 assertions across 6 groups in `tests/anuenue.tcyr`; first micro-benchmarks in `tests/anuenue.bcyr` (hsv_rainbow ≈8 ns/call, tty_fg_rgb_buf ≈45 ns/call); end-to-end baseline in `docs/benchmarks.md` (~53 ns/byte over cat, 17.4× output expansion).
+- Pipe-purity verified: capability surface is read(0) + write(1) + brk(12) + exit(60). No open, connect, fork, exec, signal, ioctl.
 
-**Dep gate**: darshana ANSI 24-bit fg path stable (already at 0.5.0).
+**Dep gate**: darshana ANSI 24-bit fg path — **delivered at darshana 0.5.1** (anuenue was the consumer asking; pre-0.5.1 darshana shipped only 8/16 named SGR colors). Sandhi-unlock pattern: anuenue's M1 drove darshana's `tty_fg_rgb` / `tty_bg_rgb` / `_buf` variants into existence.
+
+**Acceptance** (all green): `echo "AGNOS" | ./build/anuenue` renders rainbow ASCII; `printf 'X%.0s' {1..100000} | ./build/anuenue > /dev/null` exits 0 with no OOM; baseline bench captured.
 
 ### M2 — Flag Surface (v0.3.0)
 

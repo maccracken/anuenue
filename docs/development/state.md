@@ -5,22 +5,21 @@
 
 ## Version
 
-**0.1.0** — scaffolded 2026-05-21 via `cyrius init anuenue`. M1 work
-(the pipe-purity proof) has landed into `[Unreleased]` against the
-0.1.0 source; cycle-open for `0.2.0` is a user-driven bump per
-`feedback_no_unprompted_version_bumps`.
+**0.2.0** — cut 2026-05-21 (open + close compressed, same day as the
+0.1.0 scaffold). **M1 closed.** Pipe-purity proof shipped: stdin →
+stdout per-byte 24-bit rainbow via darshana 0.5.1's new
+`tty_fg_rgb_buf` + `tty_sgr_reset_buf` helpers. Drove the darshana
+truecolor unlock as the sandhi consumer; both repos cut same-day.
+
+**0.1.0** — scaffolded 2026-05-21 via `cyrius init anuenue`. Empty
+filter — pure scaffold release; the M1 implementation work lives
+in the 0.2.0 section above.
 
 ## Phase
 
-**M1 (Minimum Viable Filter) — implementation complete; pending v0.2.0
-cycle-open + tag.** stdin → stdout per-byte rainbow tint shipping via
-darshana 0.5.1's new `tty_fg_rgb_buf` / `tty_sgr_reset_buf`
-primitives. Pipe-purity verified: `printf 'X%.0s' {1..100000} |
-anuenue > /dev/null` exits 0 without OOM; capability surface is
-read(0)/write(1)/brk(12)/exit(60).
-
-Next slot is **M2 — Flag Surface (v0.3.0)** per [roadmap.md](roadmap.md):
-`-s <seed>`, `-p <freq>`, `-h`, `-V`, `-F <offset>`.
+**M1 closed at v0.2.0.** Next slot is **M2 — Flag Surface (v0.3.0)**
+per [roadmap.md](roadmap.md): `-s <seed>`, `-p <freq>`, `-h`, `-V`,
+`-F <offset>`.
 
 ## Toolchain
 
@@ -45,10 +44,11 @@ crowds the filter loop.
 
 ## Binary
 
-- **Size**: TBD with DCE on. Non-DCE M1 build links the full stdlib —
-  the `note: 1236 unreachable fns (~217KB)` after every build is the
-  DCE-recoverable headroom. M5 (perf pass) sets the production
-  binary-size budget.
+- **Size (0.2.0, DCE on)**: **304 368 bytes** (~297 KB) from a clean
+  `rm -rf build && cyrius deps && CYRIUS_DCE=1 cyrius build`.
+  Reference floor for future minor-cycle comparison; M5 (perf pass)
+  will set a production budget against this number.
+- **DCE elimination**: 1 236 unreachable fns, 217 823 bytes NOPed.
 - **Output path**: `build/anuenue`
 
 ## Tests

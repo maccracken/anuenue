@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-21 — M1: Minimum Viable Filter
+
+The pipe-purity proof. stdin → stdout, per-byte 24-bit-truecolor
+rainbow tint, capability surface = read(0) + write(1) + brk(12) +
+exit(60). Drove the darshana 0.5.1 truecolor unlock as the sandhi
+consumer for the new `tty_fg_rgb_buf` + `tty_sgr_reset_buf`
+helpers.
+
 ### Added
 
 - **M1 — Minimum Viable Filter.** stdin → stdout per-byte rainbow
@@ -49,11 +57,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Notes
 
-- VERSION stays at `0.1.0` — M1 is the **open cycle** of `0.2.0`
-  but the user drives the bump-on-open per
-  `feedback_no_unprompted_version_bumps`. The roadmap's
-  M1-acceptance work lives in `[Unreleased]` until the bump
-  instruction lands.
+- darshana pin bumped 0.5.0 → 0.5.1 as the sandhi-unlock pattern's
+  consumer half: anuenue asked for truecolor, darshana shipped the
+  surface, anuenue's pin advanced to consume it. Both repos cut
+  same-day (2026-05-21).
+- DCE binary captured at the cut — see `docs/development/state.md`
+  binary row.
+- Module split landed (`src/filter.cyr` + `src/main.cyr`); the
+  predicted third file `src/hsv.cyr` didn't earn a split at M1 and
+  may be revisited at M3 (UTF-8 grapheme awareness).
 
 ## [0.1.0] — 2026-05-21
 
