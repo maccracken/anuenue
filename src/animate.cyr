@@ -1,0 +1,404 @@
+# animate.cyr — M4 (v0.5.0) animation surface.
+#
+# anuenue's filter loop (M1–M3) is a pure pipe — read a line, tint
+# it, write it, repeat. Animation is a deliberate deviation: we
+# buffer the entire input first, then repaint it many times with the
+# rainbow's phase shifted per frame. The user's terminal becomes a
+# "scrolling rainbow" view of the same N lines.
+#
+# Capability surface delta vs the filter:
+#
+#   - rt_sigprocmask(14)  — block SIGHUP/SIGINT/SIGTERM so they queue
+#                            on a signalfd instead of killing the
+#                            process mid-frame
+#   - signalfd4(289)       — non-blocking exit-signal probe between
+#                            frames
+#   - nanosleep(35)        — frame interval (via chrono.sleep_ms)
+#   - clock_gettime(228)   — deadline math (via chrono.clock_now_ns)
+#
+# Pipe-purity caveat: animation mode is the v1.0 exception to the
+# "no buffering beyond a line" rule from CLAUDE.md. The byte stream
+# is bounded (ANUENUE_ANIMATE_INPUT_MAX) and pre-tagged once before
+# the frame loop runs — per-frame cost is O(clusters), not O(UTF-8
+# decode). Documented in the M7 ADR 0001 (pipe-purity) carry-forward.
+#
+# Library surface (anuenue_animate, _pretag_clusters, etc.) lives in
+# THIS file; main.cyr's M2 flag dispatcher routes -a invocations
+# here. The filter loop (anuenue_filter) is untouched.
+
+# ---- module-level constants ---------------------------------------
+
+# Input buffer ceiling for animation mode. 64 KB covers a generous
+# screen-of-text — ~10 lines × 200 chars × 4-byte worst-case codepoints
+# leaves headroom. Reads beyond this are dropped (graceful degradation:
+# render what fit; don't OOM). Heap-allocated per CLAUDE.md.
+var ANUENUE_ANIMATE_INPUT_MAX = 65536;
+
+# Maximum cluster count anuenue will index in a single animation
+# invocation. 8 192 clusters @ 8 bytes per slot = 64 KB. Sized to
+# match the input-byte ceiling at ~8 bytes per cluster average (the
+# all-ASCII worst case is 1 byte/cluster, but realistic mixed input
+# trends higher).
+var ANUENUE_ANIMATE_CLUSTER_MAX = 8192;
+
+# Frame interval. 16 ms ≈ 60 fps — the roadmap target. Mutable so a
+# future -i / --interval flag could override; M4 itself ships no
+# flag for this.
+var ANUENUE_FRAME_MS = 16;
+
+# Default animation duration when -d isn't passed. 5 seconds is enough
+# to read the rainbow scrolling across a short fortune / motd line
+# without forcing the user to Ctrl-C every invocation. -d 0 means
+# "run until SIGINT" (mirrors lolcat's behaviour).
+var ANUENUE_DEFAULT_DURATION_S = 5;
+
+# Phase units advanced per frame, default. -S overrides. Matches the
+# v0.3.0 -p (PHASE_STEP) magnitude — a -S of 1 produces a visibly
+# scrolling rainbow without strobing.
+var ANUENUE_DEFAULT_SPEED = 1;
+
+# Signal-mask constants — these mirror lib/syscalls_linux_common.cyr's
+# but referenced from anuenue so future audits can grep here for
+# "what signals does anuenue actually mask". TTY_SIGMASK_EXIT
+# (darshana 0.5.x) is HUP|INT|TERM = bits 0,1,14 = 0x4003.
+# SFD_NONBLOCK = O_NONBLOCK = 2048 on x86_64 + aarch64 Linux —
+# documented in include/uapi/asm-generic/fcntl.h.
+var ANUENUE_SFD_NONBLOCK = 2048;
+
+# ---- input buffering ----------------------------------------------
+#
+# Read stdin into `buf` (max `cap` bytes) until EOF or capacity.
+# Returns bytes read (>= 0) on success, negative on read(2) error.
+# Multiple read() calls are required for pipes — the kernel may
+# return early once a single packet arrives, even if more is coming.
+fn _animate_slurp_stdin(buf, cap): i64 {
+    var total = 0;
+    var go = 1;
+    while (go == 1) {
+        var room = cap - total;
+        if (room <= 0) { go = 0; continue; }
+        var n = file_read(STDIN, buf + total, room);
+        if (n < 0) { return n; }
+        if (n == 0) { go = 0; continue; }
+        total = total + n;
+    }
+    return total;
+}
+
+# ---- cluster pre-tagging ------------------------------------------
+#
+# Walk the input once and record cluster start offsets in `ctab` —
+# one i64 per cluster (start_byte). Cluster length is derived per-
+# frame from `ctab[i+1] - ctab[i]`; the entry at index n_clusters
+# holds `n_bytes` as a sentinel so the last cluster's length math
+# works without a special case.
+#
+# The cluster boundary logic mirrors anuenue_filter (filter.cyr M3
+# state machine): non-extending codepoints OR LF start a new
+# cluster; combining marks / ZWJ-extension / RI second-half fold
+# into the prior cluster. Invalid UTF-8 → single-byte cluster
+# (graceful degradation). Truncated UTF-8 at EOF → single-byte
+# clusters for each trailing byte (the animation buffer is finite,
+# so we never carry across chunks — the truncation case here means
+# the input itself ended mid-sequence, same fallback the M3 EOF
+# path uses).
+#
+# Returns the number of clusters tagged (≤ max_clusters). On
+# overflow, returns max_clusters and silently truncates input —
+# the frame renderer never reads past `ctab[max_clusters]`, so the
+# tail bytes simply don't animate.
+fn _pretag_clusters(buf, n_bytes, ctab, max_clusters): i64 {
+    var n_clusters = 0;
+    var prev_unpaired_ri = 0;
+    var prev_was_zwj = 0;
+    var saw_any = 0;
+
+    var i = 0;
+    while (i < n_bytes && n_clusters < max_clusters) {
+        var b = load8(buf + i);
+
+        if (b == 10) {
+            # LF is always its own cluster — open the entry and bump.
+            store64(ctab + n_clusters * 8, i);
+            n_clusters = n_clusters + 1;
+            prev_unpaired_ri = 0;
+            prev_was_zwj = 0;
+            saw_any = 1;
+            i = i + 1;
+            continue;
+        }
+
+        var seqlen = utf8_seq_len(buf, i, n_bytes);
+        if (seqlen == 0) {
+            # Truncated sequence at input EOF (no next chunk in
+            # animation mode). Treat the remaining bytes as singleton
+            # clusters — graceful degradation.
+            seqlen = 1;
+        }
+
+        var cp = utf8_decode(buf, i, seqlen);
+
+        var extending = 0;
+        if (cp_is_extending(cp) == 1) { extending = 1; }
+        if (prev_was_zwj == 1) { extending = 1; }
+        if (cp_is_regional_indicator(cp) == 1) {
+            if (prev_unpaired_ri == 1) { extending = 1; }
+        }
+
+        if (extending == 0) {
+            store64(ctab + n_clusters * 8, i);
+            n_clusters = n_clusters + 1;
+        }
+
+        prev_was_zwj = 0;
+        if (cp == 0x200D) { prev_was_zwj = 1; }
+
+        if (cp_is_regional_indicator(cp) == 1) {
+            if (prev_unpaired_ri == 1) {
+                prev_unpaired_ri = 0;
+            } else {
+                prev_unpaired_ri = 1;
+            }
+        } else {
+            if (extending == 0) { prev_unpaired_ri = 0; }
+        }
+
+        saw_any = 1;
+        i = i + seqlen;
+    }
+
+    # Sentinel: ctab[n_clusters] = byte count consumed. Lets the
+    # renderer compute the last cluster's length as ctab[n_clusters]
+    # - ctab[n_clusters-1] without a branch.
+    store64(ctab + n_clusters * 8, i);
+    return n_clusters;
+}
+
+# Count line-feeds in the tagged cluster table. This is the row-
+# count the renderer needs for tty_cursor_up between frames — each
+# LF advances the cursor by one row; the count is the re-anchor
+# distance.
+fn _count_lf_clusters(buf, ctab, n_clusters): i64 {
+    var lfs = 0;
+    var i = 0;
+    while (i < n_clusters) {
+        var off = load64(ctab + i * 8);
+        if (load8(buf + off) == 10) { lfs = lfs + 1; }
+        i = i + 1;
+    }
+    return lfs;
+}
+
+# Returns 1 if the last byte of the input (or the last byte of the
+# last fully-indexed cluster) is LF. The renderer uses this to
+# decide whether to emit a trailing CR after the last cluster so
+# the cursor lands at column 1 for the next frame's re-anchor.
+fn _input_ends_with_lf(buf, ctab, n_clusters): i64 {
+    if (n_clusters == 0) { return 0; }
+    var last_byte_idx = load64(ctab + n_clusters * 8) - 1;
+    if (last_byte_idx < 0) { return 0; }
+    if (load8(buf + last_byte_idx) == 10) { return 1; }
+    return 0;
+}
+
+# ---- per-frame render ---------------------------------------------
+#
+# Walk the cluster table once, emitting fg-escape + cluster bytes
+# into `line_buf`, flushing on LF / near-full / EOF. Functionally
+# the same shape as anuenue_filter's inner walk, minus the UTF-8
+# decode (already done at pre-tag time).
+#
+# `phase_base` is the starting phase for cluster 0; cluster i lands
+# at `phase_base + i * ANUENUE_PHASE_STEP`. Caller adjusts
+# phase_base per frame to scroll the rainbow.
+#
+# After the last cluster, if the input doesn't end in LF, we emit a
+# trailing CR (0x0d) so the cursor returns to column 1 — without
+# this, a partial-line input ("hello") would leave the cursor at
+# column 6 and tty_cursor_up wouldn't re-anchor at column 1.
+fn _render_frame(buf, ctab, n_clusters, phase_base, line_buf, input_ends_with_lf): i64 {
+    var pos = 0;
+    var phase = phase_base;
+    var rgb[24];
+
+    var i = 0;
+    while (i < n_clusters) {
+        var off = load64(ctab + i * 8);
+        var next_off = load64(ctab + (i + 1) * 8);
+        var clen = next_off - off;
+
+        if (load8(buf + off) == 10) {
+            # LF cluster — reset SGR + emit LF + flush line. Same
+            # discipline as anuenue_filter: terminal returns to
+            # default colour at end of every rendered line.
+            pos = tty_sgr_reset_buf(line_buf, pos);
+            store8(line_buf + pos, 10);
+            pos = pos + 1;
+            file_write(STDOUT, line_buf, pos);
+            pos = 0;
+            phase = phase + ANUENUE_PHASE_STEP;
+            i = i + 1;
+            continue;
+        }
+
+        # Emit fg escape + cluster bytes under one colour.
+        hsv_rainbow(phase, &rgb);
+        pos = tty_fg_rgb_buf(line_buf, pos,
+                             load64(&rgb + 0),
+                             load64(&rgb + 8),
+                             load64(&rgb + 16));
+        var k = 0;
+        while (k < clen) {
+            store8(line_buf + pos, load8(buf + off + k));
+            pos = pos + 1;
+            k = k + 1;
+        }
+
+        if (pos + ANUENUE_FLUSH_RESERVE > ANUENUE_LINE_BUF) {
+            pos = tty_sgr_reset_buf(line_buf, pos);
+            file_write(STDOUT, line_buf, pos);
+            pos = 0;
+        }
+
+        phase = phase + ANUENUE_PHASE_STEP;
+        i = i + 1;
+    }
+
+    # Tail: reset SGR, plus a trailing CR if needed so the cursor
+    # ends at column 1 of the row immediately below the last LF (or
+    # of the partial-line row, when input has no trailing LF).
+    pos = tty_sgr_reset_buf(line_buf, pos);
+    if (input_ends_with_lf == 0) {
+        store8(line_buf + pos, 13);          # CR
+        pos = pos + 1;
+    }
+    if (pos > 0) {
+        file_write(STDOUT, line_buf, pos);
+    }
+    return 0;
+}
+
+# ---- signal handling ----------------------------------------------
+#
+# Open a non-blocking signalfd masking SIGHUP/SIGINT/SIGTERM. Goes
+# through sys_sigprocmask + sys_signalfd directly (rather than
+# darshana's tty_open_signalfd) for one reason: darshana's helper
+# creates a *blocking* fd, sized for cyim/chakshu's epoll-driven
+# pattern where the wait happens at the poll layer. anuenue's frame
+# loop drives timing via chrono.sleep_ms and probes the fd between
+# frames, so non-blocking is the right shape here.
+#
+# Returns the fd on success, -1 on failure. Callers that get -1
+# should fall back to no-signal handling — Ctrl-C will still kill
+# the process normally, just without the explicit cursor-restore
+# tidy-up.
+fn _open_exit_signalfd(): i64 {
+    var mask[8];
+    var i = 0;
+    while (i < 8) { store8(&mask + i, 0); i = i + 1; }
+    store64(&mask, TTY_SIGMASK_EXIT);
+    # SIG_BLOCK = 0 — pile pending signals on the fd instead of
+    # letting them kill us.
+    if (sys_sigprocmask(0, &mask, 0) < 0) { return 0 - 1; }
+    return sys_signalfd(0 - 1, &mask, ANUENUE_SFD_NONBLOCK);
+}
+
+# Non-blocking probe: 1 if any exit signal is pending on `sigfd`,
+# 0 otherwise. The 128-byte buf accommodates Linux's
+# struct signalfd_siginfo (128 bytes); we don't inspect its contents,
+# only the success/fail status of the read.
+fn _signal_pending(sigfd): i64 {
+    if (sigfd < 0) { return 0; }
+    var siginfo[128];
+    var n = file_read(sigfd, &siginfo, 128);
+    # n > 0  → one or more siginfos drained, signal arrived.
+    # n == 0 → impossible for signalfd (man 2 signalfd documents this).
+    # n < 0  → -EAGAIN (no signal pending) or other error; either way
+    #          "no signal arrived this tick".
+    if (n > 0) { return 1; }
+    return 0;
+}
+
+# ---- main animate driver ------------------------------------------
+#
+# Orchestrates input slurp → cluster tag → frame loop. Returns:
+#   0 — clean exit (duration elapsed, or SIGINT caught)
+#   1 — runtime error (alloc fail, input read error, empty input)
+fn anuenue_animate(duration_secs, speed): i64 {
+    var in_buf      = alloc(ANUENUE_ANIMATE_INPUT_MAX);
+    # +1 slot for the sentinel ctab[n_clusters] = total_bytes
+    var ctab        = alloc((ANUENUE_ANIMATE_CLUSTER_MAX + 1) * 8);
+    var line_buf    = alloc(ANUENUE_LINE_BUF);
+    if (in_buf == 0 || ctab == 0 || line_buf == 0) {
+        return 1;
+    }
+
+    var n_bytes = _animate_slurp_stdin(in_buf, ANUENUE_ANIMATE_INPUT_MAX);
+    if (n_bytes < 0) { return 1; }
+    if (n_bytes == 0) {
+        # No input to animate. Quietly exit 0 — same shape as
+        # `cat /dev/null | anuenue` (which exits 0 from the filter
+        # path too). Animation requires something to colour.
+        return 0;
+    }
+
+    var n_clusters = _pretag_clusters(in_buf, n_bytes, ctab,
+                                      ANUENUE_ANIMATE_CLUSTER_MAX);
+    if (n_clusters == 0) { return 0; }
+
+    var n_lf = _count_lf_clusters(in_buf, ctab, n_clusters);
+    var ends_lf = _input_ends_with_lf(in_buf, ctab, n_clusters);
+
+    # Re-anchor distance: tty_cursor_up steps. Equals LF count when
+    # the input ends with LF (cursor lands at the empty row below
+    # the last LF, so we need to climb back over every LF). When the
+    # input doesn't end with LF, the final partial line doesn't
+    # contribute a row to climb over — the trailing CR puts the
+    # cursor at col 1 of that same row.
+    var rows_to_climb = n_lf;
+
+    var sigfd = _open_exit_signalfd();
+    # Hide the cursor for the duration of the animation — without
+    # this it flickers visibly between renders. We always pair it
+    # with tty_cursor_show on exit (both clean-exit and signal
+    # paths) so the user's shell prompt isn't left cursorless.
+    tty_cursor_hide();
+
+    var phase_base = ANUENUE_PHASE_START;
+    var start_ns = clock_now_ns();
+    var deadline_ns = 0;
+    if (duration_secs > 0) {
+        deadline_ns = start_ns + duration_secs * 1000000000;
+    }
+
+    var first_frame = 1;
+    var go = 1;
+    while (go == 1) {
+        if (first_frame == 0) { tty_cursor_up(rows_to_climb); }
+        first_frame = 0;
+
+        _render_frame(in_buf, ctab, n_clusters, phase_base, line_buf, ends_lf);
+
+        sleep_ms(ANUENUE_FRAME_MS);
+
+        if (_signal_pending(sigfd) == 1) { go = 0; continue; }
+
+        if (deadline_ns > 0) {
+            if (clock_now_ns() >= deadline_ns) { go = 0; continue; }
+        }
+
+        phase_base = phase_base + speed;
+    }
+
+    # Restore cursor + colour. If we exited mid-frame on a partial
+    # line (no trailing LF in input), the cursor sits at col 1 of
+    # the last rendered row; emit one LF so the shell prompt opens
+    # below the animated block. If the input ended in LF, the
+    # cursor's already on a fresh row.
+    tty_sgr_reset();
+    tty_cursor_show();
+    if (ends_lf == 0) {
+        syscall(1, 1, "\n", 1);
+    }
+    return 0;
+}

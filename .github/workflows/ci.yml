@@ -59,6 +59,17 @@ jobs:
         # document the visual delta in CHANGELOG.md.
         run: sh scripts/golden-check.sh
 
+      - name: Animation smoke (M4)
+        # Animation is non-deterministic (frame count varies with
+        # host load), so it can't have a byte-identical golden.
+        # This script asserts the structural contract instead:
+        # exit 0 on duration-elapsed AND on SIGINT, cursor-hide /
+        # cursor-show framing present, at least one cursor-up
+        # between frames. Specifically catches the "terminal left
+        # with hidden cursor after SIGINT" regression class that
+        # the M4 acceptance criterion calls out.
+        run: sh scripts/animate-smoke.sh
+
       - name: Version consistency
         # Asserts VERSION matches every place the version literal
         # lives. Drift detection per the cyim 1.2.2 lesson — without

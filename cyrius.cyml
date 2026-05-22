@@ -18,7 +18,7 @@ output = "build/anuenue"
 # toolchain binary (cyrius, ark, cyrld, cyrfmt) and consumer
 # (cyim, chakshu, bannermanor). Not a sibling-dep introduction —
 # both live in the cyrius stdlib.
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "flags"]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "flags", "chrono"]
 
 # AGNOS first-party deps — pinned tags per `feedback_dep_lockin_sandhi_unlock`.
 # darshana provides the ANSI escape primitives anuenue emits per character.
@@ -28,7 +28,7 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "b
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
 path = "../darshana"
-tag = "0.5.1"
+tag = "0.5.2"
 modules = ["dist/darshana.cyr"]
 
 [deps.sakshi]

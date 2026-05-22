@@ -10,6 +10,7 @@
 # Stdlib + darshana auto-included via cyrius.cyml.
 
 include "src/filter.cyr"
+include "src/animate.cyr"
 include "src/version_str.cyr"
 
 fn main(): i64 {
@@ -344,6 +345,177 @@ fn main(): i64 {
     assert_eq(cp_is_regional_indicator(0x1F1E5), 0, "U+1F1E5 → no");
     assert_eq(cp_is_regional_indicator(0x1F200), 0, "U+1F200 → no");
     assert_eq(cp_is_regional_indicator(0x1F308), 0, "🌈 → no");
+
+    # ---- v0.5.0 — M4 animation surface ------------------------------
+    # Cluster pre-tagging and helper math. The frame loop, signalfd,
+    # and sleep cadence resist unit-level testing — they go through
+    # scripts/golden-check.sh (which gains an animation smoke at M4)
+    # and the live SIGINT/duration smokes documented in the M4 cut
+    # commit. What we *can* lock down here: the pure functions that
+    # turn the buffered input into a cluster table the renderer
+    # walks per frame.
+
+    test_group("M4 animate — constants sanity");
+    # Defaults the flag layer falls back to.
+    assert(ANUENUE_DEFAULT_DURATION_S > 0, "default duration positive (0 reserved for 'until SIGINT')");
+    assert(ANUENUE_DEFAULT_SPEED > 0, "default speed positive");
+    assert(ANUENUE_FRAME_MS > 0, "frame interval positive");
+    assert(ANUENUE_FRAME_MS <= 33, "frame interval ≤ 33ms (~30 fps floor)");
+    # Buffer ceilings stay well clear of the cluster index sizing.
+    assert(ANUENUE_ANIMATE_INPUT_MAX > 0, "input ceiling > 0");
+    assert(ANUENUE_ANIMATE_CLUSTER_MAX > 0, "cluster ceiling > 0");
+    # SFD_NONBLOCK is the Linux kernel ABI value (O_NONBLOCK = 04000
+    # octal = 2048 decimal on every Linux arch anuenue targets).
+    assert_eq(ANUENUE_SFD_NONBLOCK, 2048, "SFD_NONBLOCK = O_NONBLOCK = 2048");
+
+    test_group("M4 animate — _pretag_clusters ASCII");
+    # Pre-tag "AGNOS\n" — six clusters, one per byte. ctab[i] holds
+    # start offset; ctab[6] holds the byte count sentinel.
+    var ab[16];
+    store8(&ab + 0, 65);  # A
+    store8(&ab + 1, 71);  # G
+    store8(&ab + 2, 78);  # N
+    store8(&ab + 3, 79);  # O
+    store8(&ab + 4, 83);  # S
+    store8(&ab + 5, 10);  # LF
+    var ac[64];           # 8 slots × 8 bytes
+    var n_ac = _pretag_clusters(&ab, 6, &ac, 7);
+    assert_eq(n_ac, 6, "AGNOS\\n → 6 clusters");
+    assert_eq(load64(&ac + 0 * 8), 0, "cluster 0 starts at byte 0");
+    assert_eq(load64(&ac + 1 * 8), 1, "cluster 1 starts at byte 1");
+    assert_eq(load64(&ac + 5 * 8), 5, "cluster 5 (LF) starts at byte 5");
+    assert_eq(load64(&ac + 6 * 8), 6, "sentinel = total byte count");
+
+    test_group("M4 animate — _pretag_clusters combining diacritic");
+    # "é" = e (1 byte) + U+0301 combining acute (2 bytes, 0xCC 0x81)
+    # → one cluster covering all 3 bytes. The cluster table records
+    # only the base codepoint's start offset.
+    var cb[8];
+    store8(&cb + 0, 101);   # 'e'
+    store8(&cb + 1, 0xCC);  # U+0301 leading byte
+    store8(&cb + 2, 0x81);  # U+0301 continuation
+    var cc[32];
+    var n_cc = _pretag_clusters(&cb, 3, &cc, 3);
+    assert_eq(n_cc, 1, "e + combining acute → 1 cluster");
+    assert_eq(load64(&cc + 0), 0, "cluster 0 starts at byte 0");
+    assert_eq(load64(&cc + 8), 3, "sentinel = 3 (cluster spans all 3 bytes)");
+
+    test_group("M4 animate — _pretag_clusters CJK");
+    # "日" = U+65E5 = 0xE6 0x97 0xA5 (3 bytes, 1 cluster), then 'A'
+    # = 1 byte = 1 cluster. Two clusters, sentinel = 4.
+    var jb[8];
+    store8(&jb + 0, 0xE6);
+    store8(&jb + 1, 0x97);
+    store8(&jb + 2, 0xA5);
+    store8(&jb + 3, 65);   # 'A'
+    var jc[32];
+    var n_jc = _pretag_clusters(&jb, 4, &jc, 3);
+    assert_eq(n_jc, 2, "日A → 2 clusters");
+    assert_eq(load64(&jc + 0), 0, "cluster 0 (日) starts at byte 0");
+    assert_eq(load64(&jc + 8), 3, "cluster 1 (A) starts at byte 3");
+    assert_eq(load64(&jc + 16), 4, "sentinel = 4");
+
+    test_group("M4 animate — _pretag_clusters truncated UTF-8");
+    # 0xE6 0x97 alone (truncated 3-byte sequence). Pre-tag converts
+    # truncation to per-byte clusters (graceful degradation; no
+    # next-chunk to wait for in animation mode).
+    var tb[4];
+    store8(&tb + 0, 0xE6);
+    store8(&tb + 1, 0x97);
+    var tc[32];
+    var n_tc = _pretag_clusters(&tb, 2, &tc, 3);
+    assert_eq(n_tc, 2, "truncated 3-byte seq → 2 singleton clusters");
+    assert_eq(load64(&tc + 0), 0, "cluster 0 starts at byte 0");
+    assert_eq(load64(&tc + 8), 1, "cluster 1 starts at byte 1");
+    assert_eq(load64(&tc + 16), 2, "sentinel = 2");
+
+    test_group("M4 animate — _pretag_clusters overflow cap");
+    # max_clusters = 2 means stop after 2 clusters are recorded; the
+    # remaining input is silently dropped. Sentinel reflects how far
+    # we actually advanced.
+    var ob[8];
+    store8(&ob + 0, 65);
+    store8(&ob + 1, 66);
+    store8(&ob + 2, 67);
+    store8(&ob + 3, 68);
+    var oc[32];
+    var n_oc = _pretag_clusters(&ob, 4, &oc, 2);
+    assert_eq(n_oc, 2, "cap = 2 → exactly 2 clusters tagged");
+    assert_eq(load64(&oc + 16), 2, "sentinel = 2 (only first 2 bytes consumed)");
+
+    test_group("M4 animate — _count_lf_clusters");
+    # Re-use the ASCII "AGNOS\n" tagged above (ac, n_ac).
+    assert_eq(_count_lf_clusters(&ab, &ac, n_ac), 1, "AGNOS\\n → 1 LF cluster");
+    # Two-line input: "A\nB\n" → 2 LF clusters.
+    var lb[8];
+    store8(&lb + 0, 65);
+    store8(&lb + 1, 10);
+    store8(&lb + 2, 66);
+    store8(&lb + 3, 10);
+    var lc[64];
+    var n_lc = _pretag_clusters(&lb, 4, &lc, 7);
+    assert_eq(n_lc, 4, "A\\nB\\n → 4 clusters");
+    assert_eq(_count_lf_clusters(&lb, &lc, n_lc), 2, "A\\nB\\n → 2 LFs");
+
+    test_group("M4 animate — _input_ends_with_lf");
+    # Re-use AGNOS\n (ends with LF) and a no-LF variant.
+    assert_eq(_input_ends_with_lf(&ab, &ac, n_ac), 1, "AGNOS\\n ends with LF");
+    var nb[4];
+    store8(&nb + 0, 65);  # A
+    store8(&nb + 1, 66);  # B
+    var nc[32];
+    var n_nc = _pretag_clusters(&nb, 2, &nc, 3);
+    assert_eq(_input_ends_with_lf(&nb, &nc, n_nc), 0, "AB → no trailing LF");
+    # Empty cluster table → false (animate driver short-circuits, but
+    # the helper must not crash on the zero case).
+    assert_eq(_input_ends_with_lf(&nb, &nc, 0), 0, "0 clusters → false");
+
+    test_group("M4 flags — -a / -d / -S parse");
+    var fs_a = flags_new();
+    var f_a_animate  = flags_add_bool(fs_a, 97,  "animate",  0, "a");
+    var f_a_duration = flags_add_int (fs_a, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
+    var f_a_speed    = flags_add_int (fs_a, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "S");
+    var argv_a[40];
+    store64(&argv_a + 0,  "anuenue");
+    store64(&argv_a + 8,  "-a");
+    store64(&argv_a + 16, "-d");
+    store64(&argv_a + 24, "3");
+    store64(&argv_a + 32, "-S");
+    var argv_a_2[16];
+    store64(&argv_a_2 + 0, "anuenue");
+    store64(&argv_a_2 + 8, "-a");
+    assert_eq(flags_parse(fs_a, 2, &argv_a_2), 0, "-a alone parses clean");
+    assert_eq(flags_get_bool(fs_a, f_a_animate), 1, "-a → animate true");
+    assert_eq(flags_get_int(fs_a, f_a_duration), ANUENUE_DEFAULT_DURATION_S, "duration = default");
+    assert_eq(flags_get_int(fs_a, f_a_speed), ANUENUE_DEFAULT_SPEED, "speed = default");
+
+    var fs_b = flags_new();
+    var f_b_animate  = flags_add_bool(fs_b, 97,  "animate",  0, "a");
+    var f_b_duration = flags_add_int (fs_b, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
+    var f_b_speed    = flags_add_int (fs_b, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "S");
+    var argv_b[48];
+    store64(&argv_b + 0,  "anuenue");
+    store64(&argv_b + 8,  "-a");
+    store64(&argv_b + 16, "-d");
+    store64(&argv_b + 24, "12");
+    store64(&argv_b + 32, "-S");
+    store64(&argv_b + 40, "4");
+    assert_eq(flags_parse(fs_b, 6, &argv_b), 0, "-a -d 12 -S 4 parses clean");
+    assert_eq(flags_get_bool(fs_b, f_b_animate), 1, "-a → animate true");
+    assert_eq(flags_get_int(fs_b, f_b_duration), 12, "duration = 12");
+    assert_eq(flags_get_int(fs_b, f_b_speed), 4, "speed = 4");
+
+    # Long-form: --duration=N attached syntax (mirrors M2 --freq=N test).
+    var fs_c = flags_new();
+    var f_c_animate  = flags_add_bool(fs_c, 97,  "animate",  0, "a");
+    var f_c_duration = flags_add_int (fs_c, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
+    var argv_c[24];
+    store64(&argv_c + 0,  "anuenue");
+    store64(&argv_c + 8,  "--animate");
+    store64(&argv_c + 16, "--duration=0");
+    assert_eq(flags_parse(fs_c, 3, &argv_c), 0, "--animate --duration=0 parses clean");
+    assert_eq(flags_get_bool(fs_c, f_c_animate), 1, "--animate → true");
+    assert_eq(flags_get_int(fs_c, f_c_duration), 0, "duration = 0 ('until SIGINT' sentinel)");
 
     test_group("M2 — version literal consistency");
     # _VERSION_STR_ANUENUE is auto-generated by scripts/version-

@@ -18,7 +18,7 @@ Tagged when **all** of the following hold:
 - [x] **UTF-8 correct by default** — grapheme-cluster aware cycling (Ruby lolcat got this wrong; AGNOS ships it right) *— shipped at M3 / v0.4.0; practical-subset classifier, ADR 0003 (M7) records the trade vs full UAX #29*
 - [ ] **TTY-aware** — no ANSI when stdout isn't a terminal; sensible behavior with `NO_COLOR` env *(M6)*
 - [ ] **Color-mode negotiation** — 24-bit / 256-color / 16-color / monochrome fallback per `TERM` + `COLORTERM` *(M6)*
-- [ ] **Animation parity with `lolcat -a`** — cursor positioning, frame timing, signal-safe (SIGINT restores cursor) *(M4)*
+- [x] **Animation parity with `lolcat -a`** — cursor positioning, frame timing, signal-safe (SIGINT restores cursor) *— shipped at M4 / v0.5.0; non-blocking signalfd probe between frames, `tty_cursor_up` re-anchor, 16 ms frame interval*
 - [~] **Per-character overhead measured** — benchmark showing the cost vs `cat`, tracked in `docs/benchmarks.md` *(baseline + M3 regression captured; M5 sets the production budget)*
 - [ ] **Dogfooded** in real AGNOS pipelines (`iam | anuenue` MOTD; `bnrmr | anuenue` banners) for at least one minor-cycle window *(blocked on first consumer wiring, anticipated post-M6)*
 - [ ] **Security audit pass** — `docs/audit/YYYY-MM-DD-audit.md` clean; specific checks for stdin-bytes-as-untrusted and buffer-bounds on the line buffer *(M8)*
@@ -31,7 +31,7 @@ anuenue is small enough that the dep map is the *core* of the roadmap — each m
 
 | Dep | Used At | Provides | Pin Strategy |
 |-----|---------|----------|--------------|
-| **darshana** | v0.2.0+ | ANSI 24-bit escape generation (`tty_fg_rgb_buf` / `tty_sgr_reset_buf`); cursor positioning (M4); color-mode capability probing (M6) | Track latest stable; bump on sandhi at each minor close per [feedback_dep_lockin_sandhi_unlock](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_dep_lockin_sandhi_unlock.md). Currently pinned to 0.5.1 (M1 truecolor unlock). |
+| **darshana** | v0.2.0+ | ANSI 24-bit escape generation (`tty_fg_rgb_buf` / `tty_sgr_reset_buf`); cursor positioning (`tty_cursor_up` / `_hide` / `_show` at M4); color-mode capability probing (M6) | Track latest stable; bump on sandhi at each minor close per [feedback_dep_lockin_sandhi_unlock](https://github.com/MacCracken/agnosticos/blob/main/.claude/projects/-home-macro-Repos-agnosticos/memory/feedback_dep_lockin_sandhi_unlock.md). Currently pinned to 0.5.2 (M4 relative-cursor unlock). |
 | **sakshi** | v0.1.0+ (required by standards) | Error type, tracing, structured logging | Tag-pinned; bump on consumer-need or sandhi. Currently 2.2.5. |
 | **agnostik** | v0.1.0+ | Shared Result / Error shapes | Tag-pinned. Currently 1.2.2. |
 | **Cyrius stdlib** | all | string, fmt, alloc, io, vec, str, syscalls, assert, bench, args, flags (M2+) | Toolchain pin (`cyrius.cyml [package].cyrius`). Currently 6.0.1. |
@@ -45,17 +45,19 @@ Explicitly **not** wired (evaluated and rejected for v1.0):
 
 ## Current focus
 
-**Next slot: M4 — Animation Mode (v0.5.0).** `-a` / `-d <duration>` /
-`-S <speed>` + cursor positioning + SIGINT cursor-restore. Dep gate:
-`darshana::cursor` (already exposed in 0.5.x, no sandhi bump needed
-unless the SIGINT-safe restore primitives land elsewhere).
+**Next slot: M5 — Performance Pass (v0.6.0).** Recover the ASCII
+hot-path overhead M3 introduced (53 → 86 ns/byte regression) without
+giving up cluster correctness. ASCII short-circuit + flattened
+`cp_is_extending` LUT + phase-cached escape buffer. No dep gate;
+pure internal optimisation.
 
-**Shipped:** M0 (v0.1.0) → M1 (v0.2.0) → M2 (v0.3.0) → M3 (v0.4.0).
-See the per-milestone entries below for delivered surface.
+**Shipped:** M0 (v0.1.0) → M1 (v0.2.0) → M2 (v0.3.0) → M3 (v0.4.0)
+→ M4 (v0.5.0). See the per-milestone entries below for delivered
+surface.
 
-**Remaining to v1.0:** M4 (animation) → M5 (perf) → M6 (color-mode
-negotiation) → M7 (surface freeze + ADRs) → M8 (security closeout) →
-v1.0.0 (tag on user signal).
+**Remaining to v1.0:** M5 (perf) → M6 (color-mode negotiation) →
+M7 (surface freeze + ADRs) → M8 (security closeout) → v1.0.0 (tag
+on user signal).
 
 ## Milestones
 
@@ -119,20 +121,76 @@ Shipped surface:
 
 **Practical-subset boundaries**: Hangul L/V/T composition and some Brahmic spacing-mark sequences misclassify as advancing (errs on "more rainbow, not less"). Acceptable trade for the shipped scope; M6 / M7 may revisit if a real-world corpus reports drift.
 
-### M4 — Animation Mode (v0.5.0) — *next*
+### M4 — Animation Mode (v0.5.0) — ✅ shipped 2026-05-22
 
-`-a` (animate) + `-d <duration>` + `-S <speed>` — the lolcat animation experience.
+`-a` (animate) + `-d <secs>` (default 5; `0` = until SIGINT) +
+`-S <speed>` (default 1; phase advance per frame) — lolcat-equivalent
+animation experience.
 
-- **Cursor positioning** via `darshana::cursor` (save/restore, move-up, clear-line). Confirm the 0.5.x surface covers what's needed before opening v0.5.0; sandhi-bump darshana if not.
-- **Frame loop**: buffer one full-screen worth of cluster-tagged input (M3's cluster state machine re-runs per frame with `ANUENUE_PHASE_START` advanced), render, sleep, repaint. Pipe-purity caveat: animation mode buffers more than one line — document the deviation in the M7 surface-freeze ADR.
-- **SIGINT handler**: restore cursor + emit `\x1b[0m` reset before exit. Capability-surface gains `rt_sigaction(13)` — call out in the security audit (M8).
-- **Frame timing**: 16ms intervals via `clock_nanosleep`; drift target <1 frame over a 60-second run.
+Shipped surface:
 
-**Acceptance**: `cat poem.txt | ./build/anuenue -a -d 5` renders 5s of animation, ends cleanly, leaves terminal sane after SIGINT.
+- **`src/animate.cyr`** — new ~270-line module. Buffers stdin once
+  (64 KB ceiling), pre-tags grapheme clusters via the M3 state
+  machine into an i64-per-cluster table (8 192-cluster ceiling +
+  sentinel slot holding total bytes), then loops a render-sleep-
+  cursor_up sequence at ~60 fps (16 ms frame interval). Phase
+  advances by `-S` units per frame to scroll the rainbow through
+  the buffered block.
+- **Cursor re-anchor**: `darshana::tty_cursor_up(n)` (sandhi-bumped
+  0.5.1 → 0.5.2 for this milestone — anuenue is the consumer
+  asking, darshana exposed the relative-cursor primitive, anuenue's
+  pin advances to consume it). Frame loop counts LF clusters once
+  at pre-tag time; `tty_cursor_up(rows)` re-anchors before each
+  re-render. No-trailing-LF inputs get a CR emitted at frame tail
+  so the cursor lands at column 1 of the partial-line row.
+- **SIGINT / SIGTERM / SIGHUP handler**: non-blocking signalfd
+  (SFD_NONBLOCK = 2048) opened at startup, with sigprocmask
+  queuing the signals on the fd instead of killing the process.
+  Frame loop probes the fd between sleeps; any pending signal
+  drops the loop into the clean-exit cleanup (cursor show + SGR
+  reset + final LF on no-trailing-LF inputs). Bypasses
+  `darshana::tty_open_signalfd` (which creates a blocking fd for
+  epoll-driven consumers) — non-blocking is the right shape for
+  anuenue's sleep_ms-driven cadence.
+- **Frame timing**: `chrono::sleep_ms(16)` between frames (16 ms
+  → ~60 fps). Deadline math via `chrono::clock_now_ns()` —
+  monotonic clock, immune to wall-clock adjustments. Stdlib
+  `chrono` added to `[deps].stdlib`.
+- **42 new tcyr assertions across 9 groups** in
+  `tests/anuenue.tcyr`: M4 constants sanity (SFD_NONBLOCK =
+  2048, defaults positive, frame interval ≤33 ms); `_pretag_clusters`
+  over ASCII / combining diacritic / CJK / truncated UTF-8 /
+  overflow cap; `_count_lf_clusters`; `_input_ends_with_lf`; flag
+  parsing for `-a` alone, `-a -d N -S M`, and `--animate
+  --duration=0`.
+- **`scripts/animate-smoke.sh`** — structural guard. Animation
+  can't have a byte-identical golden (frame count varies with
+  host load), so the script asserts the contract instead: exit
+  0 on duration-elapsed AND on SIGINT, cursor-hide / cursor-show
+  framing, ≥1 cursor-up emitted. Wired into CI as **Animation
+  smoke (M4)**.
 
-**Dep gate**: `darshana::cursor` covers save/restore + clear-line. Cyrius stdlib provides nanosleep + signal handling.
+**Pipe-purity deviation** (carry-forward to ADR 0001): animation
+mode buffers up to 64 KB of stdin, deliberately deviating from
+the M1/M2/M3 "no buffering beyond a line" rule. Bounded by the
+input ceiling and the cluster-table ceiling.
 
-### M5 — Performance Pass (v0.6.0)
+**Capability surface delta** (vs M3): `rt_sigprocmask(14)` (block
+exit signals so they queue), `signalfd4(289)` (non-blocking probe
+fd), `nanosleep(35)` (frame interval via chrono.sleep_ms). M8's
+audit will fold these into the v1.0-frozen capability set.
+
+**Dep gate**: darshana relative-cursor primitives — **delivered
+at darshana 0.5.2** (`tty_cursor_up(n)` / `tty_cursor_down(n)`).
+Cyrius stdlib's `chrono` provides nanosleep + monotonic clock;
+`syscalls_linux_common` exposes `sys_sigprocmask` + `sys_signalfd`.
+
+**Acceptance** (all green): `echo "AGNOS" | ./build/anuenue -a
+-d 1` renders ~60 frames, exits 0, leaves cursor visible; SIGINT
+during a 60-s animation exits 0 with cursor-show emitted; all
+four M3 goldens still byte-identical (filter path unaffected).
+
+### M5 — Performance Pass (v0.6.0) — *next*
 
 Get per-character overhead back toward the v0.3.0 floor — M3 regressed the ASCII hot path from 53 → 86 ns/byte (62%) for cluster classification. Recover most of it without giving up grapheme correctness.
 

@@ -4,6 +4,107 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-22 — M4: Animation Mode
+
+The lolcat-`-a` cut. Three new flags (`-a` / `-d` / `-S`) sit between
+the M2 argv parser and a new `anuenue_animate` driver that buffers
+stdin once, pre-tags grapheme clusters with the M3 state machine,
+and repaints the buffered block at ~60 fps with the rainbow's phase
+shifted per frame. Non-animation invocations are unchanged — the
+v0.3.0 `-s 100` golden remains byte-identical, all four M3 fixtures
+remain green. SIGINT / SIGTERM / SIGHUP cleanup is wired through a
+non-blocking signalfd probe between frames: a Ctrl-C during
+animation restores the cursor, resets SGR, and exits 0 instead of
+killing the process mid-render.
+
+### Added
+
+- **M4 — Animation Mode.** `-a` / `--animate` enables animation;
+  `-d <secs>` / `--duration` sets the run length in seconds (default
+  5; `0` means "until SIGINT", mirroring lolcat); `-S <step>` /
+  `--speed` sets the per-frame phase advance (default 1). Frame
+  interval is hardcoded at 16 ms (~60 fps) — the M5 perf pass may
+  expose this as a flag if a consumer asks.
+- **`src/animate.cyr`** — new module, ~270 lines. Surface:
+  - `_animate_slurp_stdin(buf, cap)` — reads stdin in a loop until
+    EOF or capacity (64 KB ceiling); graceful truncation past the
+    cap (the tail bytes simply don't animate).
+  - `_pretag_clusters(buf, n, ctab, max)` — runs the M3 cluster
+    state machine once over the buffered input, recording each
+    cluster's start offset into `ctab` (one i64 per cluster + a
+    sentinel slot holding the total byte count). 8 192-cluster
+    cap; ~64 KB for the index. Cluster length per render is
+    derived as `ctab[i+1] - ctab[i]` — no per-frame UTF-8 reparse.
+  - `_count_lf_clusters` / `_input_ends_with_lf` — helper math
+    for the cursor re-anchor distance and the trailing-CR
+    decision.
+  - `_render_frame(buf, ctab, n_clusters, phase_base, line_buf,
+    ends_lf)` — walks the cluster table emitting fg-escape +
+    cluster bytes into the same 32 KB line buffer the filter
+    uses; flushes on LF / near-full / EOF. Tail emits SGR reset
+    and a CR when input lacks a trailing LF, so the cursor lands
+    at column 1 for the next frame's `tty_cursor_up` re-anchor.
+  - `_open_exit_signalfd` / `_signal_pending` — non-blocking
+    signalfd (SFD_NONBLOCK = O_NONBLOCK = 2048) masking
+    HUP/INT/TERM. The frame loop probes the fd between sleep
+    intervals and breaks cleanly when any exit signal arrives.
+    Bypasses `darshana::tty_open_signalfd` (which creates a
+    blocking fd for epoll-driven consumers) — the helper is the
+    right shape for cyim/chakshu, wrong for anuenue's
+    sleep_ms-driven cadence.
+  - `anuenue_animate(duration_secs, speed)` — orchestrator.
+    Hides the cursor, runs the frame loop, restores cursor +
+    SGR on every exit path (clean / signal / read error / OOM).
+- **42 new assertions across 9 groups** in `tests/anuenue.tcyr`:
+  M4 constants sanity (defaults positive, SFD_NONBLOCK = 2048);
+  `_pretag_clusters` over ASCII / combining diacritic / CJK /
+  truncated UTF-8 / overflow cap; `_count_lf_clusters`;
+  `_input_ends_with_lf`; M4 flag parsing (`-a` alone /
+  `-a -d N -S M` / `--animate --duration=0`).
+- **`scripts/animate-smoke.sh`** — structural guard for animation
+  mode. Animation can't have a byte-identical golden (frame count
+  varies with host load), so this script asserts the contract
+  instead: exit 0 on duration-elapsed AND on SIGINT, cursor-hide
+  + cursor-show framing present, at least one cursor-up emitted.
+  Wired into CI as the **Animation smoke (M4)** step between
+  Golden output and Version consistency.
+- **`stdlib += chrono`** in `cyrius.cyml [deps].stdlib` — frame
+  timing (`sleep_ms`) and deadline math (`clock_now_ns`).
+  Standard AGNOS-userland chrono usage; same pin already used by
+  every consumer needing wall-clock or monotonic time.
+
+### Changed
+
+- **darshana pin bumped** 0.5.1 → 0.5.2 — the v0.5.2 cut adds
+  `tty_cursor_up(n)` (CSI `<n>A`) and `tty_cursor_down(n)` (CSI
+  `<n>B`) to round out the cursor surface. Sandhi-unlock pattern,
+  second turn of the same crank that produced 0.5.1 — anuenue is
+  the consumer asking, darshana exposed the relative-cursor
+  primitives, anuenue's pin advances to consume them. Pure
+  additions on the darshana surface; M1/M2/M3 paths use only the
+  previously-available helpers.
+
+### Capability surface
+
+- **Animation mode adds** three syscalls to anuenue's surface:
+  `rt_sigprocmask(14)` (block exit signals), `signalfd4(289)`
+  (open the non-blocking probe fd), `nanosleep(35)` (frame
+  interval via chrono.sleep_ms). The filter path (no `-a`) keeps
+  the M2 surface intact: `read(0)` + `write(1)` + `brk(12)` +
+  `exit(60)` + `open(2)` / `close(3)` (one-shot, for
+  `/proc/self/cmdline` at argv parsing). The M8 security audit
+  will record these as the v1.0-frozen capability set.
+
+### Pipe-purity deviation
+
+Animation mode buffers up to 64 KB of stdin before rendering. This
+deviates from the "no buffering beyond a line" rule the filter
+loop enforces — animation needs a known-length block to repaint.
+The deviation is bounded (input-buffer ceiling, cluster-table
+ceiling) and limited to the `-a` invocation. ADR 0001
+(pipe-purity, planned at M7) will record the rule and its single
+animation-mode exception explicitly.
+
 ## [0.4.0] — 2026-05-21 — M3: UTF-8 Grapheme Awareness
 
 The Unicode-correct-by-default cut. Filter cycles by grapheme

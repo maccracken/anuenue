@@ -20,6 +20,7 @@
 # Stdlib (incl. args, flags) + darshana auto-included via cyrius.cyml.
 
 include "src/filter.cyr"
+include "src/animate.cyr"
 include "src/version_str.cyr"
 
 # ---- exit codes ---------------------------------------------------
@@ -102,11 +103,14 @@ fn main(): i64 {
     build_argv_array(&argv_arr);
 
     var fs = flags_new();
-    var f_help    = flags_add_bool(fs, 104, "help",    0, "show this help and exit");                  # 'h'
-    var f_version = flags_add_bool(fs, 86,  "version", 0, "print version and exit");                   # 'V'
-    var f_freq    = flags_add_int (fs, 112, "freq",    ANUENUE_PHASE_STEP, "phase step per character"); # 'p'
-    var f_seed    = flags_add_int (fs, 115, "seed",    0, "starting hue phase (deterministic)");       # 's'
-    var f_offset  = flags_add_int (fs, 70,  "offset",  0, "additive phase offset (Ruby lolcat compat)"); # 'F'
+    var f_help     = flags_add_bool(fs, 104, "help",     0, "show this help and exit");                  # 'h'
+    var f_version  = flags_add_bool(fs, 86,  "version",  0, "print version and exit");                   # 'V'
+    var f_freq     = flags_add_int (fs, 112, "freq",     ANUENUE_PHASE_STEP, "phase step per character");# 'p'
+    var f_seed     = flags_add_int (fs, 115, "seed",     0, "starting hue phase (deterministic)");       # 's'
+    var f_offset   = flags_add_int (fs, 70,  "offset",   0, "additive phase offset (Ruby lolcat compat)"); # 'F'
+    var f_animate  = flags_add_bool(fs, 97,  "animate",  0, "animate: buffer input, scroll the rainbow");# 'a'
+    var f_duration = flags_add_int (fs, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "animation duration in seconds (0 = until SIGINT)"); # 'd'
+    var f_speed    = flags_add_int (fs, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "animation: phase advance per frame");# 'S'
 
     if (flags_parse(fs, ac, &argv_arr) != 0) {
         # Surface the specific error first so the user knows which
@@ -145,6 +149,12 @@ fn main(): i64 {
     ANUENUE_PHASE_STEP  = flags_get_int(fs, f_freq);
     ANUENUE_PHASE_START = flags_get_int(fs, f_seed) + flags_get_int(fs, f_offset);
 
+    # M4 dispatch: if -a is set, route to animate; otherwise the
+    # M1/M2/M3 pipe-purity filter loop.
+    if (flags_get_bool(fs, f_animate) == 1) {
+        return anuenue_animate(flags_get_int(fs, f_duration),
+                               flags_get_int(fs, f_speed));
+    }
     return anuenue_filter();
 }
 
