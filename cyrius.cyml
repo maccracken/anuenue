@@ -1,0 +1,39 @@
+[package]
+name = "anuenue"
+version = "${file:VERSION}"
+description = "anuenue — ānuenue (Hawaiian: rainbow). Stdin → stdout rainbow-tint pipe filter. Cyrius-native lolcat equivalent."
+license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/anuenue"
+language = "cyrius"
+cyrius = "6.0.1"
+
+[build]
+entry = "src/main.cyr"
+test = "src/test.cyr"
+output = "build/anuenue"
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench"]
+
+# AGNOS first-party deps — pinned tags per `feedback_dep_lockin_sandhi_unlock`.
+# darshana provides the ANSI escape primitives anuenue emits per character.
+# sakshi is the canonical error/tracing crate per first-party-standards.
+# agnostik provides the shared Result/Error shapes sakshi consumers use.
+
+[deps.darshana]
+git = "https://github.com/MacCracken/darshana.git"
+path = "../darshana"
+tag = "0.5.0"
+modules = ["dist/darshana.cyr"]
+
+[deps.sakshi]
+git = "https://github.com/MacCracken/sakshi.git"
+path = "../sakshi"
+tag = "2.2.5"
+modules = ["dist/sakshi.cyr"]
+
+[deps.agnostik]
+git = "https://github.com/MacCracken/agnostik.git"
+path = "../agnostik"
+tag = "1.2.2"
+modules = ["dist/agnostik.cyr"]
