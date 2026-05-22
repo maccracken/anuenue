@@ -92,11 +92,22 @@ var ANUENUE_FLUSH_RESERVE = 32;
 var ANUENUE_ESC_TABLE_ENTRY_SIZE = 32;
 var _PHASE_ESC_TABLE = 0;
 
-# Build the table. Lazy-initialised: the first call to
-# `_emit_phase_esc` triggers _phase_esc_init if the table hasn't been
-# populated yet. Callers running before `alloc_init` will crash
-# inside alloc — same discipline as the rest of anuenue's heap
-# allocations. Idempotent: returns 0 if the table is already built.
+# Build the table. Idempotent: returns 0 if the table is already
+# built. At M6 (v0.7.0) the table contents depend on
+# `ANUENUE_COLOR_MODE` (set by main.cyr after `anuenue_detect_color_mode`
+# runs):
+#   TRUECOLOR → `\x1b[38;2;R;G;Bm` per phase (13–19 bytes)
+#   COLOR_256 → `\x1b[38;5;Nm`     per phase (8–11 bytes, N from
+#                                   _rgb_to_256)
+#   COLOR_16  → `\x1b[9Nm`         per phase (5 bytes, code from
+#                                   _rgb_to_16)
+#   MONO      → never reached (main.cyr dispatches to
+#               anuenue_passthrough before any filter call)
+#
+# Hot-path emit (_emit_phase_esc) is unchanged — it just memcpys
+# the pre-baked bytes whatever their length. The table contract
+# (8-byte length + payload) stays the same shape; only the payload
+# contents differ between modes.
 fn _phase_esc_init(): i64 {
     if (_PHASE_ESC_TABLE != 0) { return 0; }
     _PHASE_ESC_TABLE = alloc(ANUENUE_PHASE_MOD * ANUENUE_ESC_TABLE_ENTRY_SIZE);
@@ -106,12 +117,24 @@ fn _phase_esc_init(): i64 {
     var i = 0;
     while (i < ANUENUE_PHASE_MOD) {
         hsv_rainbow(i, &rgb);
-        # tty_fg_rgb_buf returns the new pos after the escape — at
-        # offset 0 that's the escape's byte length.
-        var elen = tty_fg_rgb_buf(&ebuf, 0,
-                                  load64(&rgb + 0),
-                                  load64(&rgb + 8),
-                                  load64(&rgb + 16));
+        var r = load64(&rgb + 0);
+        var g = load64(&rgb + 8);
+        var b = load64(&rgb + 16);
+        var elen = 0;
+        if (ANUENUE_COLOR_MODE == ANUENUE_COLOR_TRUE) {
+            elen = tty_fg_rgb_buf(&ebuf, 0, r, g, b);
+        } else { if (ANUENUE_COLOR_MODE == ANUENUE_COLOR_256) {
+            # TODO(sandhi 0.5.3): replace with tty_fg_256_buf
+            elen = _fg_256_buf_compat(&ebuf, 0, _rgb_to_256(r, g, b));
+        } else { if (ANUENUE_COLOR_MODE == ANUENUE_COLOR_16) {
+            # TODO(sandhi 0.5.3): replace with tty_sgr_buf
+            elen = _sgr_buf_compat(&ebuf, 0, _rgb_to_16(r, g, b));
+        } else {
+            # MONO falls through with elen=0; the table won't be
+            # used (main.cyr dispatches to passthrough) but
+            # building it cleanly costs nothing.
+            elen = 0;
+        } } }
         var entry = _PHASE_ESC_TABLE + i * ANUENUE_ESC_TABLE_ENTRY_SIZE;
         store64(entry, elen);
         var k = 0;

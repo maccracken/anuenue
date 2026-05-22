@@ -43,7 +43,7 @@ ESC=$(printf '\033')
 # 1 second is enough to fire ~60 frames at 16ms intervals without
 # bloating CI runtime.
 echo "[animate-smoke] -d 1 over short input"
-printf 'AGNOS\n' | "$BIN" -a -d 1 > "$OUT" || fail "exit non-zero on duration-elapsed run"
+printf 'AGNOS\n' | "$BIN" --color=24bit -a -d 1 > "$OUT" || fail "exit non-zero on duration-elapsed run"
 pass "exit 0 after -d 1"
 
 [ -s "$OUT" ] || fail "no output captured from animation"
@@ -65,7 +65,7 @@ pass "cursor-up present (frame loop ran more than once)"
 # Launch with a long duration, kill after a small grace period, and
 # verify cursor-show was emitted before the process exited.
 echo "[animate-smoke] SIGINT mid-animation"
-( printf 'AGNOS\n' | "$BIN" -a -d 60 > "$OUT" 2>&1 ) &
+( printf 'AGNOS\n' | "$BIN" --color=24bit -a -d 60 > "$OUT" 2>&1 ) &
 PID=$!
 sleep 0.3
 kill -INT "$PID" 2>/dev/null || fail "anuenue exited before SIGINT could land"

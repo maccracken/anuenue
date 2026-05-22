@@ -16,8 +16,8 @@ Tagged when **all** of the following hold:
 
 - [ ] **Public CLI surface frozen** — every flag documented, every flag exercised in tests, every flag behavior matches docs *(M2 shipped the surface at v0.3.0; freeze happens at M7)*
 - [x] **UTF-8 correct by default** — grapheme-cluster aware cycling (Ruby lolcat got this wrong; AGNOS ships it right) *— shipped at M3 / v0.4.0; practical-subset classifier, ADR 0003 (M7) records the trade vs full UAX #29*
-- [ ] **TTY-aware** — no ANSI when stdout isn't a terminal; sensible behavior with `NO_COLOR` env *(M6)*
-- [ ] **Color-mode negotiation** — 24-bit / 256-color / 16-color / monochrome fallback per `TERM` + `COLORTERM` *(M6)*
+- [x] **TTY-aware** — no ANSI when stdout isn't a terminal; sensible behavior with `NO_COLOR` env *— shipped at M6 / v0.7.0; isatty via `_isatty_compat` (darshana 0.5.3 pending), NO_COLOR / `--no-color` / stdout-not-TTY all route to MONO*
+- [x] **Color-mode negotiation** — 24-bit / 256-color / 16-color / monochrome fallback per `TERM` + `COLORTERM` *— shipped at M6 / v0.7.0; four-mode taxonomy with priority chain, override via `--color <mode>`*
 - [x] **Animation parity with `lolcat -a`** — cursor positioning, frame timing, signal-safe (SIGINT restores cursor) *— shipped at M4 / v0.5.0; non-blocking signalfd probe between frames, `tty_cursor_up` re-anchor, 16 ms frame interval*
 - [x] **Per-character overhead measured** — benchmark showing the cost vs `cat`, tracked in `docs/benchmarks.md` *— M5 (v0.6.0) shipped scripts/perf-bench.sh as the ratchet; ASCII no-LF at 47 ns/byte, below the v0.3.0 53 ns/byte floor*
 - [ ] **Dogfooded** in real AGNOS pipelines (`iam | anuenue` MOTD; `bnrmr | anuenue` banners) for at least one minor-cycle window *(blocked on first consumer wiring, anticipated post-M6)*
@@ -45,22 +45,20 @@ Explicitly **not** wired (evaluated and rejected for v1.0):
 
 ## Current focus
 
-**Next slot: M6 — Color-Mode Negotiation (v0.7.0).** Be a good
-citizen on every terminal — anuenue currently assumes 24-bit
-truecolor. M6 adds 256-color, 16-color, monochrome fallbacks +
-`NO_COLOR` honour + `TERM` / `COLORTERM` probing. Dep gate:
-darshana's color-capability probing surface (currently absent —
-sandhi-unlock candidate, third turn). The M5 phase-cached escape
-buffer is the layer M6 branches against — palette swap reuses the
-table-emit shape.
+**Next slot: M7 — Public-Surface Freeze + Guide Docs (v0.8.0).**
+Three ADRs (pipe-purity / HSV-inline / grapheme-cluster cycling),
+the integration guide, runnable examples. Refresh `print_usage`
+help text to cover M6's new flags. The "freeze" half is the
+contract: every flag documented, every flag exercised in tests,
+every flag behaviour matches docs. No dep gate; this is the doc
+half of the v1.0 surface lock.
 
 **Shipped:** M0 (v0.1.0) → M1 (v0.2.0) → M2 (v0.3.0) → M3 (v0.4.0)
-→ M4 (v0.5.0) → M5 (v0.6.0). See the per-milestone entries below
-for delivered surface.
+→ M4 (v0.5.0) → M5 (v0.6.0) → M6 (v0.7.0). See the per-milestone
+entries below for delivered surface.
 
-**Remaining to v1.0:** M6 (color-mode negotiation) → M7 (surface
-freeze + ADRs) → M8 (security closeout) → v1.0.0 (tag on user
-signal).
+**Remaining to v1.0:** M7 (surface freeze + ADRs) → M8 (security
+closeout) → v1.0.0 (tag on user signal).
 
 ## Milestones
 
@@ -251,21 +249,61 @@ the M5 acceptance cap of 350 KB.
 −21% under the target); UTF-8 unaffected or better (43.0 vs 66.3,
 −35%); binary < 350 KB DCE (335 KB).
 
-### M6 — Color-Mode Negotiation (v0.7.0) — *next*
+### M6 — Color-Mode Negotiation (v0.7.0) — ✅ shipped 2026-05-22
 
-Be a good citizen on every terminal — anuenue currently assumes 24-bit truecolor.
+Four-mode taxonomy with priority chain — anuenue stops assuming
+24-bit truecolor and adapts to whatever the terminal supports.
 
-- 24-bit (default on modern terms): emit `\x1b[38;2;R;G;Bm` directly — unchanged from current behavior
-- 256-color fallback: HSV → 6×6×6 cube + 24-step grayscale ramp
-- 16-color fallback: 8 base + 8 bright; mood-preserving quantization
-- Monochrome: stdout-not-tty OR `NO_COLOR` env OR `--no-color` flag → pass-through `cat`
-- `TERM` / `COLORTERM` env probing via darshana — capability surface gains `getenv` (or `/proc/self/environ` read) at startup
+Shipped surface:
 
-**Acceptance**: tests cover all four modes (mock-TTY harness); `NO_COLOR=1 echo X | anuenue` is byte-identical to `echo X`.
+- **`src/color.cyr`** — new ~200-line module:
+  - Mode enum: `ANUENUE_COLOR_MONO` / `_16` / `_256` / `_TRUE`.
+  - `_color_override_from_str` / `_color_mode_from_override` —
+    string-flag parsing for `--color <auto|24bit|truecolor|256|
+    16|none|off|never>` + enum mapping.
+  - `_channel_to_6` / `_rgb_to_256` — xterm 6×6×6 cube quantization
+    using midpoint thresholds `{48, 115, 155, 195, 235}`. Skips
+    the 24-step grayscale ramp because the HSV rainbow never hits
+    R == G == B at non-vertex phases.
+  - `_rgb_to_16` — maps `(R≥128, G≥128, B≥128)` bright-flag triple
+    to one of `{91, 92, 93, 94, 95, 96}` for the six rainbow
+    sectors; white `97` defensive fallback.
+  - `anuenue_detect_color_mode(no_color, force_color, override)`
+    — combines all priority rules: explicit override > --no-color
+    > NO_COLOR env > stdout-not-TTY (unless --force-color) >
+    COLORTERM truecolor/24bit > TERM `-direct` or `256color` >
+    16-color fallback.
+  - `anuenue_passthrough()` — MONO bypass; tight read(0)/write(1)
+    loop matching `cat`'s capability surface.
+- **Three new flags in `src/main.cyr`**: `-n` / `--no-color`,
+  `-C` / `--force-color`, `-c` / `--color <mode>`. Test hook
+  (golden suite uses `--color=24bit` to pin a mode regardless of
+  the runner's TTY state).
+- **`_phase_esc_init` mode-aware** in `src/filter.cyr` — branches
+  on `ANUENUE_COLOR_MODE` to populate the 1 530-entry table with
+  per-mode escape bytes. Hot-path emit unchanged.
+- **Two new golden fixtures**: `agnos-rainbow-256-s100.out`
+  (160 B), `agnos-rainbow-16-s100.out` (82 B). Plus three
+  MONO-equivalence checks in `golden-check.sh`.
+- **69 new tcyr assertions across 6 groups**: mode enum + alias
+  parser + `_channel_to_6` bucket boundaries + `_rgb_to_256`
+  canonical hues + `_rgb_to_16` bright-palette quantization +
+  `_fg_256_buf_compat` / `_sgr_buf_compat` escape framing +
+  bounds rejection.
 
-**Dep gate**: darshana color-capability probing surface (`tty_caps_detect` or equivalent) — currently absent, sandhi-unlock candidate for the M6 cut.
+**Sandhi pending**: darshana 0.5.3 (third turn) ships
+`tty_isatty(fd)` + `tty_sgr_buf(buf, pos, code)` +
+`tty_fg_256_buf(buf, pos, n)`. anuenue M6 ships with three
+stand-ins marked `TODO(sandhi 0.5.3)` — mechanical swap when
+0.5.3 lands; recovers ~1-2 KB binary.
 
-### M7 — Public-Surface Freeze + Guide Docs (v0.8.0)
+**Acceptance** (all green): tests cover all four modes; `NO_COLOR=1
+echo X | anuenue` is byte-identical to `echo X`.
+
+**Binary**: 335 160 → **349 832 B** (+14 672 B). 168 B under the
+M5 cap. M7 closeout should raise the cap to 512 KB.
+
+### M7 — Public-Surface Freeze + Guide Docs (v0.8.0) — *next*
 
 API/CLI contract freeze + downstream-consumer documentation. Three ADRs queued (none written yet — see [`docs/adr/`](../adr/) status):
 

@@ -111,7 +111,11 @@ bench_corpus() {
     bytes="$3"
 
     cat_med=$(median_ns "cat '$fx' > /dev/null")
-    ane_med=$(median_ns "'$BIN' < '$fx' > /dev/null")
+    # --color=24bit forces the truecolor path regardless of TTY state.
+    # Without this, perf-bench's piped stdout triggers M6's auto-
+    # detect → MONO and we'd benchmark the passthrough instead of
+    # the filter's hot path.
+    ane_med=$(median_ns "'$BIN' --color=24bit < '$fx' > /dev/null")
 
     # ns/byte overhead anuenue adds on top of the kernel's bare pipe.
     overhead_ns=$((ane_med - cat_med))

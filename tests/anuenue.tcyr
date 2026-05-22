@@ -9,6 +9,7 @@
 #
 # Stdlib + darshana auto-included via cyrius.cyml.
 
+include "src/color.cyr"
 include "src/filter.cyr"
 include "src/animate.cyr"
 include "src/version_str.cyr"
@@ -438,6 +439,112 @@ fn main(): i64 {
     }
     assert(len_min >= 13, "min entry length ≥ 13 (truecolor SGR floor)");
     assert(len_max <= 19, "max entry length ≤ 19 (truecolor SGR ceiling)");
+
+    # ---- v0.7.0 — M6 color-mode negotiation -------------------------
+    # Mode enum + override-string parser + RGB quantization. The
+    # detect_color_mode dispatcher reads getenv + isatty so it
+    # can't be unit-tested deterministically here — golden-check.sh
+    # owns the NO_COLOR / --no-color / --color=none acceptance.
+
+    test_group("M6 color — mode enum + override parser");
+    assert_eq(ANUENUE_COLOR_MONO, 0, "MONO enum value");
+    assert_eq(ANUENUE_COLOR_16,   1, "COLOR_16 enum value");
+    assert_eq(ANUENUE_COLOR_256,  2, "COLOR_256 enum value");
+    assert_eq(ANUENUE_COLOR_TRUE, 3, "TRUECOLOR enum value");
+
+    # --color string → override enum
+    assert_eq(_color_override_from_str("auto"),      ANUENUE_COLOR_OVERRIDE_AUTO, "auto → AUTO");
+    assert_eq(_color_override_from_str("24bit"),     ANUENUE_COLOR_OVERRIDE_TRUE, "24bit → TRUE");
+    assert_eq(_color_override_from_str("truecolor"), ANUENUE_COLOR_OVERRIDE_TRUE, "truecolor → TRUE");
+    assert_eq(_color_override_from_str("256"),       ANUENUE_COLOR_OVERRIDE_256,  "256 → 256");
+    assert_eq(_color_override_from_str("16"),        ANUENUE_COLOR_OVERRIDE_16,   "16 → 16");
+    assert_eq(_color_override_from_str("none"),      ANUENUE_COLOR_OVERRIDE_NONE, "none → NONE");
+    assert_eq(_color_override_from_str("off"),       ANUENUE_COLOR_OVERRIDE_NONE, "off → NONE");
+    assert_eq(_color_override_from_str("never"),     ANUENUE_COLOR_OVERRIDE_NONE, "never → NONE");
+    # Unknown strings fall back to AUTO (don't silently force a mode the user didn't intend)
+    assert_eq(_color_override_from_str("bogus"),     ANUENUE_COLOR_OVERRIDE_AUTO, "unknown → AUTO");
+
+    # Override → mode mapping
+    assert_eq(_color_mode_from_override(ANUENUE_COLOR_OVERRIDE_TRUE), ANUENUE_COLOR_TRUE, "OVERRIDE_TRUE → TRUE");
+    assert_eq(_color_mode_from_override(ANUENUE_COLOR_OVERRIDE_256),  ANUENUE_COLOR_256,  "OVERRIDE_256 → 256");
+    assert_eq(_color_mode_from_override(ANUENUE_COLOR_OVERRIDE_16),   ANUENUE_COLOR_16,   "OVERRIDE_16 → 16");
+    assert_eq(_color_mode_from_override(ANUENUE_COLOR_OVERRIDE_NONE), ANUENUE_COLOR_MONO, "OVERRIDE_NONE → MONO");
+
+    test_group("M6 color — _channel_to_6 cube quantization");
+    # Channel buckets: 0 → 0, 95 → 1, 135 → 2, 175 → 3, 215 → 4, 255 → 5.
+    # Thresholds (midpoints): 48, 115, 155, 195, 235.
+    assert_eq(_channel_to_6(0),   0, "0 → bucket 0");
+    assert_eq(_channel_to_6(47),  0, "47 (last <48) → bucket 0");
+    assert_eq(_channel_to_6(48),  1, "48 → bucket 1");
+    assert_eq(_channel_to_6(95),  1, "95 → bucket 1");
+    assert_eq(_channel_to_6(114), 1, "114 → bucket 1");
+    assert_eq(_channel_to_6(115), 2, "115 → bucket 2");
+    assert_eq(_channel_to_6(135), 2, "135 → bucket 2");
+    assert_eq(_channel_to_6(155), 3, "155 → bucket 3");
+    assert_eq(_channel_to_6(175), 3, "175 → bucket 3");
+    assert_eq(_channel_to_6(195), 4, "195 → bucket 4");
+    assert_eq(_channel_to_6(215), 4, "215 → bucket 4");
+    assert_eq(_channel_to_6(235), 5, "235 → bucket 5");
+    assert_eq(_channel_to_6(255), 5, "255 → bucket 5");
+
+    test_group("M6 color — _rgb_to_256 canonical hues");
+    # Each canonical hue corner of the HSV rainbow → a known 256
+    # cube index. 16 + 36*r6 + 6*g6 + b6.
+    assert_eq(_rgb_to_256(255, 0,   0),   196, "(255,0,0) red    → 16 + 36*5 = 196");
+    assert_eq(_rgb_to_256(255, 255, 0),   226, "(255,255,0) yel  → 16 + 36*5 + 6*5 = 226");
+    assert_eq(_rgb_to_256(0,   255, 0),   46,  "(0,255,0) grn   → 16 + 6*5 = 46");
+    assert_eq(_rgb_to_256(0,   255, 255), 51,  "(0,255,255) cyan → 16 + 6*5 + 5 = 51");
+    assert_eq(_rgb_to_256(0,   0,   255), 21,  "(0,0,255) blue  → 16 + 5 = 21");
+    assert_eq(_rgb_to_256(255, 0,   255), 201, "(255,0,255) mag  → 16 + 36*5 + 5 = 201");
+    # Pure white + pure black corners (defensive — not hit by the rainbow)
+    assert_eq(_rgb_to_256(0,   0,   0),   16,  "(0,0,0) → 16 (cube base)");
+    assert_eq(_rgb_to_256(255, 255, 255), 231, "(255,255,255) → 231 (cube tip)");
+
+    test_group("M6 color — _rgb_to_16 bright-palette quantization");
+    # The 6 canonical rainbow hue corners → 6 of the 8 bright codes.
+    assert_eq(_rgb_to_16(255, 0,   0),   91, "red → bright red (91)");
+    assert_eq(_rgb_to_16(255, 255, 0),   93, "yellow → bright yellow (93)");
+    assert_eq(_rgb_to_16(0,   255, 0),   92, "green → bright green (92)");
+    assert_eq(_rgb_to_16(0,   255, 255), 96, "cyan → bright cyan (96)");
+    assert_eq(_rgb_to_16(0,   0,   255), 94, "blue → bright blue (94)");
+    assert_eq(_rgb_to_16(255, 0,   255), 95, "magenta → bright magenta (95)");
+    # Mid-ramp samples — the (≥128) thresholds bin them deterministically.
+    assert_eq(_rgb_to_16(200, 150, 0),   93, "(200,150,0) red→yel ramp → yellow");
+    assert_eq(_rgb_to_16(100, 200, 50),  92, "(100,200,50) green-dominant → green");
+    # Edge case: all dimmed below 128 (rainbow never hits this; the
+    # white fallback is the safe default rather than emitting nothing).
+    assert_eq(_rgb_to_16(50,  50,  50),  97, "(50,50,50) all-dim → white fallback");
+
+    test_group("M6 color — _fg_256_buf_compat escape framing");
+    # \x1b[38;5;Nm shape: 7-byte prefix + 1-3 digits + 'm'.
+    var c256buf[16];
+    assert_eq(_fg_256_buf_compat(&c256buf, 0,   0), 9,  "N=0 → 9 bytes total");
+    assert_eq(load8(&c256buf + 0), 0x1b, "byte 0 = ESC");
+    assert_eq(load8(&c256buf + 1), 0x5b, "byte 1 = '['");
+    assert_eq(load8(&c256buf + 5), 0x35, "byte 5 = '5' (palette selector)");
+    assert_eq(load8(&c256buf + 7), 0x30, "byte 7 = '0' (N=0 single digit)");
+    assert_eq(load8(&c256buf + 8), 0x6d, "byte 8 = 'm' (terminator)");
+    assert_eq(_fg_256_buf_compat(&c256buf, 0, 255), 11, "N=255 → 11 bytes total");
+    assert_eq(load8(&c256buf + 7),  0x32, "byte 7 = '2'");
+    assert_eq(load8(&c256buf + 8),  0x35, "byte 8 = '5'");
+    assert_eq(load8(&c256buf + 9),  0x35, "byte 9 = '5'");
+    assert_eq(load8(&c256buf + 10), 0x6d, "byte 10 = 'm'");
+    # Bounds rejection
+    assert_eq(_fg_256_buf_compat(&c256buf, 0, 0 - 1), 0 - 1, "N=-1 rejected");
+    assert_eq(_fg_256_buf_compat(&c256buf, 0, 256),   0 - 1, "N=256 rejected");
+
+    test_group("M6 color — _sgr_buf_compat escape framing");
+    # \x1b[<code>m shape: 2-byte prefix + 1-3 digits + 'm'.
+    var sgrbuf[16];
+    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 91), 5, "code=91 → 5 bytes total");
+    assert_eq(load8(&sgrbuf + 0), 0x1b, "byte 0 = ESC");
+    assert_eq(load8(&sgrbuf + 2), 0x39, "byte 2 = '9'");
+    assert_eq(load8(&sgrbuf + 3), 0x31, "byte 3 = '1'");
+    assert_eq(load8(&sgrbuf + 4), 0x6d, "byte 4 = 'm'");
+    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 0),  4,  "code=0 (reset) → 4 bytes");
+    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 999), 6, "code=999 → 6 bytes");
+    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 0 - 1), 0 - 1, "code=-1 rejected");
+    assert_eq(_sgr_buf_compat(&sgrbuf, 0, 1000),  0 - 1, "code=1000 rejected");
 
     # ---- v0.5.0 — M4 animation surface ------------------------------
     # Cluster pre-tagging and helper math. The frame loop, signalfd,

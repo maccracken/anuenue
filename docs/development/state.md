@@ -5,10 +5,24 @@
 
 ## Version
 
-**0.6.0** — *current.* cut 2026-05-22 (sixth release; second
-same-day cut after 0.5.0). **M5 closed.** Performance pass:
-three layered optimisations recover the M3 ASCII regression and
-overshoot the v0.3.0 floor. ASCII short-circuit + binary-searched
+**0.7.0** — *current.* cut 2026-05-22 (seventh release; third
+same-day cut). **M6 closed.** Color-mode negotiation:
+TRUECOLOR / 256-color / 16-color / MONO selected at startup from a
+priority chain — `--color <mode>` override → `--no-color` →
+`NO_COLOR` env → stdout-not-TTY (unless `--force-color`) → COLORTERM
+→ TERM. M6 acceptance held: `NO_COLOR=1 echo X | anuenue` is byte-
+identical to `echo X`. New module `src/color.cyr` (~200 lines)
+with mode detection, RGB quantization (xterm 256-cube + bright-16),
+and the MONO passthrough. Truecolor perf is unchanged (the M5
+phase-cache shape stays the same; only per-entry bytes vary). 69
+new tcyr assertions (172 → 241); two new golden fixtures
+(`agnos-rainbow-256-s100.out` 160 B, `agnos-rainbow-16-s100.out`
+82 B); three NO_COLOR equivalence checks in golden-check.sh.
+
+**0.6.0** — cut 2026-05-22 (sixth release; second same-day cut
+after 0.5.0). **M5 closed.** Performance pass: three layered
+optimisations recover the M3 ASCII regression and overshoot the
+v0.3.0 floor. ASCII short-circuit + binary-searched
 `cp_is_extending` LUT + 1 530-entry phase-cached escape buffer.
 End-to-end ASCII no-LF overhead 91.6 → **47.0 ns/byte (−48.7%)**;
 UTF-8 mixed 66.3 → 43.0 (−35.1%). DCE binary +1 040 B (the 48 KB
@@ -60,6 +74,24 @@ filter — pure scaffold release.
 
 ## Phase
 
+**M6 (Color-Mode Negotiation) — shipped at v0.7.0.** Four-mode
+taxonomy (MONO / COLOR_16 / COLOR_256 / TRUECOLOR) selected by a
+priority chain at startup. New `src/color.cyr` owns the mode
+enum, override-string parser, RGB → 256-cube quantization, RGB →
+bright-16 quantization, `anuenue_detect_color_mode`, and
+`anuenue_passthrough` (the MONO bypass). Three new flags wire
+into main.cyr: `--no-color`, `--force-color`, `--color <mode>`.
+M5's phase-cache becomes mode-aware — the 1 530-entry table holds
+per-mode escape bytes; the hot-path emit (`_emit_phase_esc`) is
+unchanged because its memcpy is byte-shape-agnostic.
+
+**Dep gate**: darshana 0.5.3 (sandhi in flight) will ship
+`tty_isatty(fd)`, `tty_sgr_buf(buf, pos, code)`, `tty_fg_256_buf(
+buf, pos, n)`. anuenue M6 ships with three stand-ins
+(`_isatty_compat`, `_sgr_buf_compat`, `_fg_256_buf_compat`) in
+`src/color.cyr`, marked `TODO(sandhi 0.5.3)`. When 0.5.3 lands,
+the swap is mechanical and recovers ~1-2 KB binary.
+
 **M5 (Performance Pass) — shipped at v0.6.0.** Three layered
 optimisations recover the M3 cluster-classification regression
 and beat the v0.3.0 floor on the canonical ASCII no-LF corpus.
@@ -89,14 +121,13 @@ per-byte measurement docs/benchmarks.md kept describing manually.
 It's the M5 ratchet — every minor cut from here forward re-runs
 it.
 
-Next slot is **M6 — Color-Mode Negotiation (v0.7.0)** per
-[roadmap.md § M6](roadmap.md#m6--color-mode-negotiation-v070):
-TTY detection, `TERM` / `COLORTERM` probing, 24-bit / 256 / 16 /
-monochrome fallbacks, `NO_COLOR` honour. Dep gate: darshana's
-color-capability probing surface (currently absent — sandhi-unlock
-candidate). M5's phase-cached escape buffer is the layer M6 will
-swap palettes against; the table just needs additional entries
-or a per-mode pointer.
+Next slot is **M7 — Public-Surface Freeze + Guide Docs (v0.8.0)**
+per [roadmap.md § M7](roadmap.md#m7--public-surface-freeze--guide-docs-v080):
+ADR 0001 (pipe-purity), ADR 0002 (HSV inline not abaco), ADR 0003
+(grapheme cluster cycling). `docs/guides/integrating-anuenue.md`.
+`docs/examples/`. Every flag documented; every public symbol cited
+from at least one example. No dep gate; pure documentation work,
+the bridge between M6's behavioural surface and M8's audit.
 
 ## Toolchain
 
@@ -107,9 +138,10 @@ or a per-mode pointer.
 
 | File | Lines | Surface |
 |------|-------|---------|
-| `src/filter.cyr` | ~540 | `ANUENUE_*` constants + **`ANUENUE_ESC_TABLE_ENTRY_SIZE`** (M5). `hsv_rainbow(phase, out_rgb)` integer 6-sector HSV. **M3 (v0.4.0)**: `utf8_seq_len` / `utf8_decode` / `cp_is_extending` / `cp_is_regional_indicator`. **M5 (v0.6.0)**: `cp_is_extending` rewritten as binary search over `_CP_EXT_TABLE` (21 sorted ranges); new `_phase_esc_init()` builds the `_PHASE_ESC_TABLE` (1 530 × 32 B heap; idempotent first-call init); `_emit_phase_esc(line_buf, pos, phase)` replaces the per-cluster `hsv_rainbow + tty_fg_rgb_buf` pair. `anuenue_filter()` adds an ASCII short-circuit branch ahead of the UTF-8 path and routes both branches through `_emit_phase_esc`. |
-| `src/animate.cyr` | ~280 | **NEW at M4 (v0.5.0)**. `ANUENUE_ANIMATE_INPUT_MAX` / `_CLUSTER_MAX` / `_FRAME_MS` / `_DEFAULT_DURATION_S` / `_DEFAULT_SPEED` / `_SFD_NONBLOCK` constants. `_animate_slurp_stdin`, `_pretag_clusters` (ASCII short-circuit added at M5), `_count_lf_clusters`, `_input_ends_with_lf`, `_render_frame` (routes through M5's `_emit_phase_esc`), `_open_exit_signalfd`, `_signal_pending`, `anuenue_animate(duration_secs, speed)` (M5: calls `_phase_esc_init()` at startup, shared with filter path). |
-| `src/main.cyr` | ~115 | Entrypoint + flag dispatch. args_init / alloc_init / flags context (M4 added -a / -d / -S to the M2 -h/-V/-p/-s/-F set) / argv pack / flags_parse / dispatch to print_version / print_usage / **anuenue_animate or anuenue_filter** (M4 branch). |
+| `src/color.cyr` | ~200 | **NEW at M6 (v0.7.0)**. Color mode enum (`ANUENUE_COLOR_MONO`/`_16`/`_256`/`_TRUE`); override-string parser + enum mapping (`_color_override_from_str` / `_color_mode_from_override`); RGB quantization (`_channel_to_6`, `_rgb_to_256` xterm cube; `_rgb_to_16` bright-palette); `anuenue_detect_color_mode(no_color, force_color, override)` reading getenv + the `_isatty_compat` stand-in; `anuenue_passthrough()` MONO bypass (read/write loop, no escapes). Three darshana-0.5.3-pending stand-ins (`_isatty_compat`, `_fg_256_buf_compat`, `_sgr_buf_compat`) marked `TODO(sandhi 0.5.3)`. |
+| `src/filter.cyr` | ~545 | `ANUENUE_*` constants + **`ANUENUE_ESC_TABLE_ENTRY_SIZE`** (M5). `hsv_rainbow(phase, out_rgb)` integer 6-sector HSV. M3: `utf8_seq_len` / `utf8_decode` / `cp_is_extending` (M5: binary-searched LUT) / `cp_is_regional_indicator`. M5: `_phase_esc_init()` / `_emit_phase_esc()` / `_PHASE_ESC_TABLE` (1 530 × 32 B heap; idempotent). **M6 (v0.7.0)**: `_phase_esc_init` branches on `ANUENUE_COLOR_MODE` to populate the table with per-mode escapes (TRUECOLOR via darshana's `tty_fg_rgb_buf`, 256 via compat stand-in, 16 via compat stand-in). `anuenue_filter()` keeps the M5 hot path; ASCII short-circuit unchanged. |
+| `src/animate.cyr` | ~280 | M4 surface (animation: slurp + pretag + frame loop + signalfd). M5: ASCII short-circuit in `_pretag_clusters`; `_render_frame` routes through `_emit_phase_esc`; `_phase_esc_init` shared with filter. M6: animation also benefits from per-mode escapes via the same path; MONO never reaches animation (main.cyr dispatches to passthrough first). |
+| `src/main.cyr` | ~135 | Entrypoint + flag dispatch. args_init / alloc_init / flags context (M6 added `-n` / `-C` / `-c` to the M2/M4 sets) / argv pack / flags_parse / **M6 colour-mode detect step writes `ANUENUE_COLOR_MODE`**; dispatch to print_version / print_usage / **anuenue_passthrough (MONO) or anuenue_animate (-a) or anuenue_filter**. |
 | `src/version_str.cyr` | ~18 | **AUTO-GENERATED** by `scripts/version-bump.sh`. Holds `_VERSION_STR_ANUENUE` + `_VERSION_LEN_ANUENUE`. Never hand-edit; CI's Version consistency step asserts the literal matches `VERSION`. |
 | `src/test.cyr` | 12 | top-level test entry stub (referenced by `cyrius.cyml [build].test`). Actual tests live in `tests/anuenue.tcyr`. |
 
@@ -124,31 +156,30 @@ buffer wants to live next to the geometry.
 
 ## Binary
 
-- **Size (0.6.0, DCE on)**: **335 160 bytes** (~327 KB). Delta vs
-  0.5.0: **+1 040 bytes** for the M5 phase-cache helper fns
-  (`_phase_esc_init` / `_emit_phase_esc`) + `cp_is_extending`'s
-  LUT init body. The 48 KB phase-cache table lives on the heap
-  (one alloc at first filter/animate entry) and is NOT counted
-  in the DCE binary — that's why an optimisation of this size
-  costs ~1 KB on disk instead of 50 KB.
-- **DCE elimination**: 1 251 unreachable fns, 220 732 bytes NOPed.
-- **M5 acceptance cap**: 350 KB — comfortably under (−14 840 B
-  headroom for M6's color-mode negotiation work).
-- **Prior floors**: 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
+- **Size (0.7.0, DCE on)**: **349 832 bytes** (~342 KB). Delta vs
+  0.6.0: **+14 672 bytes** for the M6 color module + flag wiring +
+  stdlib pulls (`streq`, `strstr`, `getenv`). 168 B headroom under
+  the M5-set cap of 350 KB; darshana 0.5.3 sandhi will recover
+  ~1-2 KB when the three stand-ins go.
+- **DCE elimination**: 1 240 unreachable fns, 219 392 bytes NOPed.
+- **Cap discipline for M7+**: the 350 KB cap was an M5 acceptance
+  number; M7 closeout should raise it to 512 KB to give clear
+  runway through v1.0 without changing the gate's role.
+- **Prior floors**: 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
 - **Output path**: `build/anuenue`
 
 ## Tests
 
 | File | Status |
 |------|--------|
-| `tests/anuenue.tcyr` | **172 assertions across 28 groups**. M1: smoke/HSV/geometry/constants (47). M2: long/short bool, int extraction, attached long-form, additive seed+offset, error variants, version literal (27). M3: utf8_seq_len 1/2/3/4-byte detection, invalid + truncated handling, utf8_decode canonical codepoints, cp_is_extending across ranges, cp_is_regional_indicator bounds (30). M4: animate constants sanity, _pretag_clusters ASCII / combining / CJK / truncated / overflow cap, _count_lf_clusters, _input_ends_with_lf, -a/-d/-S flag parsing (42). **M5: _phase_esc_init idempotency, per-entry byte-identical round-trip against hsv_rainbow + tty_fg_rgb_buf across 8 canonical phases, phase normalization (negative + >MOD), table layout invariants (32-byte stride, 13–19-byte entry length envelope) (26)**. End-to-end stdin/stdout owned by golden harness + animate-smoke + perf-bench. |
-| `tests/anuenue.bcyr` | **2 micro-benchmarks** (1M iter each): `hsv_rainbow` ≈8 ns/call, `tty_fg_rgb_buf` ≈45 ns/call. The M5 cut replaced these on the hot path with `_emit_phase_esc` (~10 ns/call); the bcyr still measures the underlying primitives since they remain in the table-build path at startup. |
-| `tests/anuenue.fcyr` | fuzz stub — first harness still pending. M5 added a third natural target: random `phase` against `_emit_phase_esc` → no crash, never reads past `_PHASE_ESC_TABLE`'s bounds, returns `pos + elen` consistently. |
-| `tests/golden/*.out` | **Four fixtures**: `agnos-rainbow-s100` (M2 ASCII baseline, 238 B), `cjk-mixed-s0` (M3 CJK+ASCII, 125 B), `combining-s0` (M3 é + rainbow, 155 B), `zwj-flag-s0` (M3 ZWJ family + flag, 135 B). All four still byte-identical after M5 — proves the phase-cached escapes match the v0.5.0 runtime path exactly. Asserted by `scripts/golden-check.sh` and CI's **Golden output** step. |
-| `scripts/animate-smoke.sh` | M4 (v0.5.0). Animation structural guard. |
-| `scripts/perf-bench.sh` | **NEW at M5 (v0.6.0)**. End-to-end ASCII + UTF-8 per-byte overhead measurement. The M5 ratchet — every minor cut from here forward re-runs it. |
+| `tests/anuenue.tcyr` | **241 assertions across 34 groups**. M1: smoke/HSV/geometry/constants (47). M2: flags (27). M3: utf8_seq_len/decode/cp_is_extending/cp_is_regional_indicator (30). M4: animate constants + _pretag_clusters + _count_lf_clusters + _input_ends_with_lf + -a/-d/-S flag parsing (42). M5: phase-cache idempotency, byte-identical round-trip, phase normalization, table layout (26). **M6 (v0.7.0): mode enum + override parser (alias coverage) + `_channel_to_6` bucket boundaries (5 thresholds) + `_rgb_to_256` canonical hues + `_rgb_to_16` bright-palette quantization + `_fg_256_buf_compat`/`_sgr_buf_compat` escape framing + bounds rejection (69)**. End-to-end behaviour owned by golden + animate-smoke + perf-bench. |
+| `tests/anuenue.bcyr` | 2 micro-benchmarks: `hsv_rainbow` ≈8 ns/call, `tty_fg_rgb_buf` ≈45 ns/call. Pre-M5 the filter loop called both per cluster; M5+ uses `_emit_phase_esc` (~10 ns/call) instead. The micros still measure the table-build path. |
+| `tests/anuenue.fcyr` | fuzz stub — first harness still pending. Targets: M2 flag parser, M3 UTF-8 surface, M4 `_pretag_clusters`, M5 `_emit_phase_esc`, and (M6) `_rgb_to_256` / `_rgb_to_16` over random RGB triples. |
+| `tests/golden/*.out` | **Six fixtures**. M2/M3: `agnos-rainbow-s100` (238 B), `cjk-mixed-s0` (125 B), `combining-s0` (155 B), `zwj-flag-s0` (135 B). **M6: `agnos-rainbow-256-s100.out` (160 B), `agnos-rainbow-16-s100.out` (82 B)**. All six byte-identical across the M5/M6 cuts — proves the mode-aware phase cache matches runtime exactly. Plus three MONO equivalence checks in golden-check.sh (`NO_COLOR=1 anuenue` / `--no-color` / `--color=none` all byte-identical to input). |
+| `scripts/animate-smoke.sh` | M4 (v0.5.0). Animation structural guard. M6: invokes with `--color=24bit` so the TTY-detection in M6 doesn't drop the test into MONO. |
+| `scripts/perf-bench.sh` | M5 (v0.6.0). End-to-end ASCII + UTF-8 per-byte overhead. M6: invokes with `--color=24bit` for the same reason. The M5 ratchet. |
 
-Assertion count history: M1 47 → M2 74 (+27) → M3 104 (+30) → M4 146 (+42) → M5 172 (+26).
+Assertion count history: M1 47 → M2 74 (+27) → M3 104 (+30) → M4 146 (+42) → M5 172 (+26) → M6 241 (+69).
 
 ## Dependencies
 
@@ -181,41 +212,45 @@ Anticipated at v0.7+:
 
 ## Carry-Forward
 
-- **`docs/adr/0001-pipe-purity.md`** — planned for M7. M4 introduces
-  the *first deliberate exception* to the pipe-purity rule:
-  animation mode buffers up to 64 KB of stdin before rendering.
-  M5 doesn't add a second exception — the phase-cache is a fixed
-  startup-time alloc, not input-derived buffering.
-- **`tests/anuenue.fcyr`** — fuzz harness stub still empty. Four
-  natural targets now: the M2 flag parser (random argv tokens →
-  `flags_parse` never crashes), the M3 UTF-8 surface
-  (`utf8_seq_len` over arbitrary byte streams), the M4
-  `_pretag_clusters` cluster state machine, and **the M5
-  `_emit_phase_esc` table lookup** (random phase input → bounded
-  write, returns `pos + elen` consistently). Defer until M6 or
-  whenever a parse / decode / cluster / table-lookup bug is
-  discovered in the wild.
-- **DCE binary size after M5** — captured at 0.6.0 cut: 335 160
-  bytes (+1 040 B vs 0.5.0). Recapture at every minor cut.
-  Headroom against the 350 KB cap: ~15 KB for M6's color-mode
-  branching.
-- **darshana 0.5.2 surface use** — `tty_cursor_down(n)` shipped
-  alongside `tty_cursor_up(n)` for symmetry but anuenue currently
-  uses only `_up`. M6 (color-mode) may sandhi-bump darshana
-  again for a `tty_caps_detect` (or equivalent) — the right
-  moment to drive `tty_cursor_down(n)` adoption is then.
-- **Capability surface unchanged at M5** — still
-  `read(0)`/`write(1)`/`brk(12)`/`exit(60)` + one-shot `open(2)`/
-  `close(3)` for `/proc/self/cmdline`, plus the animation-mode
-  delta (`rt_sigprocmask(14)` + `signalfd4(289)` + `nanosleep(35)`).
-  M5 added no new syscalls.
-- **Phase-cache contract for M6** — `_emit_phase_esc(line_buf,
-  pos, phase)` is the layer color-mode negotiation will branch
-  against. The current table holds 24-bit truecolor escapes;
-  M6 will either swap palettes (one table per mode) or build a
-  second 256-color / 16-color / monochrome path. Decision deferred
-  until M6 opens.
+- **darshana 0.5.3 sandhi** in flight (3rd turn). Will ship
+  `tty_isatty(fd)`, `tty_sgr_buf(buf, pos, code)`,
+  `tty_fg_256_buf(buf, pos, n)`. anuenue M6 inlines those as
+  `_isatty_compat` / `_sgr_buf_compat` / `_fg_256_buf_compat`
+  in `src/color.cyr` (marked `TODO(sandhi 0.5.3)`). When 0.5.3
+  lands: bump pin, delete the 3 stand-ins, sed call sites.
+  Recovers ~1-2 KB binary.
+- **`docs/adr/0001-pipe-purity.md`** — planned for M7. M4
+  introduced the first exception (animation buffers ≤64 KB stdin).
+  M6 adds a second: MONO is a pure passthrough that bypasses the
+  filter loop entirely. The ADR now covers the rule + two
+  deliberate exceptions.
+- **`tests/anuenue.fcyr`** — fuzz harness stub still empty. Now
+  five natural targets: M2 flag parser, M3 UTF-8 surface, M4
+  `_pretag_clusters`, M5 `_emit_phase_esc`, **and (M6)
+  `_rgb_to_256` / `_rgb_to_16`** over random RGB triples (never
+  crash, always return a valid escape code). Defer until M7 or a
+  parse/decode/cluster/table/quantization bug is observed.
+- **DCE binary size after M6** — captured at 0.7.0 cut: 349 832
+  bytes (+14 672 B vs 0.6.0; 168 B headroom against the 350 KB
+  M5 cap). M7 closeout should raise the cap to 512 KB.
+- **Capability surface delta at M6** — adds open/read/close on
+  `/proc/self/environ` (getenv lookups at startup; one for
+  NO_COLOR, two for COLORTERM/TERM). Net capability set:
+  read(0)/write(1)/brk(12)/exit(60)/open(2)/close(3)/ioctl(16,
+  TIOCGWINSZ via _isatty_compat) + animation deltas
+  (rt_sigprocmask/signalfd4/nanosleep). M8 audit will record
+  this as the v1.0 candidate set.
+- **`--help` text** — M6 added three flags but `print_usage`'s
+  Examples section still shows only the M1/M2 invocations.
+  Refresh at M7's documentation pass with examples covering
+  `--no-color`, `--force-color`, `--color=256`.
+- **Animation under non-truecolor modes** — `_pretag_clusters` +
+  `_render_frame` already exercise the per-mode escape table, so
+  `anuenue -a --color=16 < poem.txt` works visibly. No tests
+  cover the 16/256 + animation combination yet — animate-smoke
+  only exercises `--color=24bit`. M7 may add structural smoke
+  variants if a consumer surfaces a regression.
 
 ## Next
 
-See [roadmap.md § M6](roadmap.md#m6--color-mode-negotiation-v070).
+See [roadmap.md § M7](roadmap.md#m7--public-surface-freeze--guide-docs-v080).

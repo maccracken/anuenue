@@ -19,6 +19,7 @@
 # the cyim drift-prevention pattern; never edit by hand).
 # Stdlib (incl. args, flags) + darshana auto-included via cyrius.cyml.
 
+include "src/color.cyr"
 include "src/filter.cyr"
 include "src/animate.cyr"
 include "src/version_str.cyr"
@@ -111,6 +112,9 @@ fn main(): i64 {
     var f_animate  = flags_add_bool(fs, 97,  "animate",  0, "animate: buffer input, scroll the rainbow");# 'a'
     var f_duration = flags_add_int (fs, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "animation duration in seconds (0 = until SIGINT)"); # 'd'
     var f_speed    = flags_add_int (fs, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "animation: phase advance per frame");# 'S'
+    var f_no_color    = flags_add_bool(fs, 110, "no-color",    0, "disable colour (pass-through cat)");                                # 'n'
+    var f_force_color = flags_add_bool(fs, 67,  "force-color", 0, "emit colour even when stdout isn't a TTY");                        # 'C'
+    var f_color       = flags_add_str (fs, 99,  "color",       "auto", "color mode: auto / 24bit / 256 / 16 / none");                  # 'c'
 
     if (flags_parse(fs, ac, &argv_arr) != 0) {
         # Surface the specific error first so the user knows which
@@ -148,6 +152,19 @@ fn main(): i64 {
     # ties is moot since both add into the same accumulator).
     ANUENUE_PHASE_STEP  = flags_get_int(fs, f_freq);
     ANUENUE_PHASE_START = flags_get_int(fs, f_seed) + flags_get_int(fs, f_offset);
+
+    # M6: detect colour mode from flags + env + TTY, then dispatch.
+    var color_override = _color_override_from_str(flags_get_str(fs, f_color));
+    ANUENUE_COLOR_MODE = anuenue_detect_color_mode(
+        flags_get_bool(fs, f_no_color),
+        flags_get_bool(fs, f_force_color),
+        color_override);
+
+    # MONO short-circuits everything (incl. -a). Acceptance:
+    # `NO_COLOR=1 echo X | anuenue` byte-identical to `echo X`.
+    if (ANUENUE_COLOR_MODE == ANUENUE_COLOR_MONO) {
+        return anuenue_passthrough();
+    }
 
     # M4 dispatch: if -a is set, route to animate; otherwise the
     # M1/M2/M3 pipe-purity filter loop.

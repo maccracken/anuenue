@@ -58,7 +58,7 @@ check_golden() {
 # fast path.
 check_golden "tests/golden/agnos-rainbow-s100.out" \
     "M2 baseline: ASCII -s 100" \
-    "printf 'AGNOS rainbow' | $BIN -s 100"
+    "printf 'AGNOS rainbow' | $BIN --color=24bit -s 100"
 
 # Fixture 2 — v0.4.0 M3 CJK. Two 3-byte CJK codepoints + ASCII.
 # Each CJK char is one cluster → one phase advance per char,
@@ -66,7 +66,7 @@ check_golden "tests/golden/agnos-rainbow-s100.out" \
 # codepoint, three payload bytes per).
 check_golden "tests/golden/cjk-mixed-s0.out" \
     "M3 CJK + ASCII -s 0" \
-    "printf '日本AGNOS' | $BIN -s 0"
+    "printf '日本AGNOS' | $BIN --color=24bit -s 0"
 
 # Fixture 3 — v0.4.0 M3 combining diacritic. \"é\" as base 'e'
 # + combining acute U+0301 (two codepoints, one grapheme). Both
@@ -80,7 +80,7 @@ check_golden "tests/golden/cjk-mixed-s0.out" \
 # UTF-8 for U+0301 COMBINING ACUTE ACCENT.
 check_golden "tests/golden/combining-s0.out" \
     "M3 combining diacritic é + rainbow" \
-    "printf 'e\314\201rainbow' | $BIN -s 0"
+    "printf 'e\314\201rainbow' | $BIN --color=24bit -s 0"
 
 # Fixture 4 — v0.4.0 M3 ZWJ + regional indicator. Family emoji
 # (👨 ZWJ 👩 ZWJ 👧) renders as ONE grapheme cluster (5 codepoints
@@ -90,13 +90,56 @@ check_golden "tests/golden/combining-s0.out" \
 # (octal form per the dash-portability note on Fixture 3).
 check_golden "tests/golden/zwj-flag-s0.out" \
     "M3 ZWJ family + RI flag" \
-    "printf '👨\342\200\215👩\342\200\215👧🇺🇸' | $BIN -s 0"
+    "printf '👨\342\200\215👩\342\200\215👧🇺🇸' | $BIN --color=24bit -s 0"
+
+# Fixture 5 — v0.7.0 M6 256-color mode. Same input bytes as
+# Fixture 1; --color=256 routes through _rgb_to_256 → 6×6×6 cube.
+# Diff catches regressions in the cube quantization, the
+# `\x1b[38;5;Nm` framing, or the phase-cache 256 branch.
+check_golden "tests/golden/agnos-rainbow-256-s100.out" \
+    "M6 256-color -s 100" \
+    "printf 'AGNOS rainbow' | $BIN --color=256 -s 100"
+
+# Fixture 6 — v0.7.0 M6 16-color mode. Same input; --color=16
+# routes through _rgb_to_16 → 6 bright codes. Diff catches
+# regressions in the (R, G, B) ≥ 128 quantization or the
+# `\x1b[<code>m` framing.
+check_golden "tests/golden/agnos-rainbow-16-s100.out" \
+    "M6 16-color -s 100" \
+    "printf 'AGNOS rainbow' | $BIN --color=16 -s 100"
+
+# Fixture 7 — v0.7.0 M6 MONO acceptance. `NO_COLOR=1 echo X |
+# anuenue` MUST be byte-identical to `echo X` — the canonical
+# acceptance for the M6 milestone, derived from no-color.org.
+# Verified by an in-script diff rather than a committed fixture
+# because the "expected" is just the input.
+NO_COLOR_OUT=$(mktemp)
+NO_COLOR_IN=$(mktemp)
+trap 'rm -f "$ACTUAL" "$ACTUAL2" "$NO_COLOR_OUT" "$NO_COLOR_IN"' EXIT INT TERM
+printf 'AGNOS rainbow\nMOTD line 2\n' > "$NO_COLOR_IN"
+NO_COLOR=1 "$BIN" < "$NO_COLOR_IN" > "$NO_COLOR_OUT"
+diff -q "$NO_COLOR_IN" "$NO_COLOR_OUT" > /dev/null \
+    || fail "NO_COLOR=1 anuenue NOT byte-identical to input"
+pass "M6 acceptance — NO_COLOR=1 anuenue == cat ($(wc -c < "$NO_COLOR_IN") bytes)"
+
+# Same check via --no-color flag — exercises the flag path
+# rather than the env path. Both must produce identical output.
+"$BIN" --no-color < "$NO_COLOR_IN" > "$NO_COLOR_OUT"
+diff -q "$NO_COLOR_IN" "$NO_COLOR_OUT" > /dev/null \
+    || fail "--no-color anuenue NOT byte-identical to input"
+pass "M6 — --no-color anuenue == cat"
+
+# And via --color=none — the test-friendly explicit form.
+"$BIN" --color=none < "$NO_COLOR_IN" > "$NO_COLOR_OUT"
+diff -q "$NO_COLOR_IN" "$NO_COLOR_OUT" > /dev/null \
+    || fail "--color=none anuenue NOT byte-identical to input"
+pass "M6 — --color=none anuenue == cat"
 
 # Determinism cross-check: same invocation twice must produce
 # byte-identical output. Catches accidental non-determinism (RNG,
 # time, environment) that the single-fixture diff would let pass.
-printf "AGNOS rainbow" | "$BIN" -s 100 > "$ACTUAL"
-printf "AGNOS rainbow" | "$BIN" -s 100 > "$ACTUAL2"
+printf "AGNOS rainbow" | "$BIN" --color=24bit -s 100 > "$ACTUAL"
+printf "AGNOS rainbow" | "$BIN" --color=24bit -s 100 > "$ACTUAL2"
 diff -q "$ACTUAL" "$ACTUAL2" > /dev/null \
     || fail "non-deterministic: two runs with the same seed produced different output"
 pass "determinism — two runs with -s 100 are byte-identical"

@@ -4,6 +4,134 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-22 — M6: Color-Mode Negotiation
+
+The four-mode cut. anuenue stops assuming 24-bit truecolor and
+adapts: TRUECOLOR / 256-color / 16-color / MONO selected at startup
+from a priority chain — `--color <mode>` override → `--no-color` →
+`NO_COLOR` env → stdout-not-TTY (unless `--force-color`) → COLORTERM
+→ TERM. M6 acceptance held: `NO_COLOR=1 echo X | anuenue` is byte-
+identical to `echo X`, asserted by golden-check.sh's new MONO checks.
+M5 truecolor perf is unchanged (the phase-cache shape stays the same;
+only the per-entry bytes vary between modes). New module: `src/color.cyr`.
+
+### Added
+
+- **M6 — Color-Mode Negotiation.** Four-mode taxonomy with
+  detection priority:
+  1. `--color <auto|24bit|truecolor|256|16|none|off|never>` override
+  2. `--no-color` flag → MONO
+  3. `NO_COLOR` env (any value, per [no-color.org](https://no-color.org)) → MONO
+  4. stdout not a TTY AND `--force-color` not set → MONO
+  5. `COLORTERM` is "truecolor" / "24bit" → TRUECOLOR
+  6. `TERM` contains "-direct" → TRUECOLOR; "256color" → COLOR_256
+  7. Fallback on a TTY → COLOR_16 (safest visible default)
+- **`src/color.cyr`** — new module, ~200 lines:
+  - Mode enum (`ANUENUE_COLOR_MONO` / `_16` / `_256` / `_TRUE`).
+  - `_color_override_from_str` / `_color_mode_from_override` —
+    string-flag parsing + enum mapping.
+  - `_channel_to_6` / `_rgb_to_256` — 6×6×6 cube quantization
+    using xterm's canonical channel midpoints `{48, 115, 155,
+    195, 235}`. Skips the 24-step grayscale ramp because the
+    HSV rainbow never hits R == G == B at non-vertex phases.
+  - `_rgb_to_16` — maps (R≥128, G≥128, B≥128) bright-flag triple
+    to one of `{91, 92, 93, 94, 95, 96}` for the six rainbow
+    sectors; white (97) as a defensive fallback.
+  - `anuenue_detect_color_mode(no_color, force_color, override)`
+    — combines all priority rules; reads `getenv` + the
+    `_isatty_compat` stand-in.
+  - `anuenue_passthrough()` — required MONO bypass; tight read/
+    write loop with no escape emission. Capability surface
+    matches `cat`: read(0) + write(1) only.
+- **Three flags wired in `src/main.cyr`**:
+  - `-n` / `--no-color` (bool) — force MONO.
+  - `-C` / `--force-color` (bool) — emit colour even when stdout
+    isn't a TTY. Useful for `anuenue --force-color | tee out.log`.
+  - `-c` / `--color <mode>` (str) — explicit override; the test
+    hook the golden suite uses to pin a mode regardless of the
+    runner's TTY state.
+- **`_phase_esc_init` is mode-aware**. Branches on
+  `ANUENUE_COLOR_MODE` to populate the 1 530-entry table with the
+  per-mode escape: 13–19 bytes/entry for TRUECOLOR (unchanged),
+  8–11 for COLOR_256, 5 for COLOR_16. The hot-path emit
+  (`_emit_phase_esc`) is byte-shape-agnostic — same memcpy.
+- **69 new tcyr assertions across 6 groups** in
+  `tests/anuenue.tcyr`: mode enum + override parser + bright-
+  palette quantization across the 6 rainbow corners + 256-cube
+  bucket boundaries at every threshold (48 / 115 / 155 / 195 /
+  235) + `_rgb_to_256` canonical hues + `_fg_256_buf_compat` /
+  `_sgr_buf_compat` escape framing + bounds rejection.
+- **`tests/golden/agnos-rainbow-256-s100.out`** (160 B) +
+  **`tests/golden/agnos-rainbow-16-s100.out`** (82 B) — new
+  fixtures pinning the 256 and 16 mode outputs.
+- **MONO acceptance in `scripts/golden-check.sh`** — three
+  invariants asserted: `NO_COLOR=1 anuenue` == cat; `--no-color
+  anuenue` == cat; `--color=none anuenue` == cat. The
+  byte-identical equivalence is the M6 acceptance, derived from
+  https://no-color.org.
+
+### Sandhi pending
+
+darshana 0.5.3 (sandhi in flight, third turn of the same crank
+that produced 0.5.1 / 0.5.2) ships:
+
+  - `tty_isatty(fd)` — proper isatty primitive
+  - `tty_sgr_buf(buf, pos, code)` — buf variant of `tty_sgr`
+  - `tty_fg_256_buf(buf, pos, n)` — 256-color fg escape emitter
+
+anuenue M6 implements the bodies inline as `_isatty_compat`,
+`_sgr_buf_compat`, `_fg_256_buf_compat` in `src/color.cyr` with
+`TODO(sandhi 0.5.3)` markers. When darshana 0.5.3 lands, the bump
+is mechanical: pin darshana 0.5.2 → 0.5.3, sed-replace the three
+compat call sites, delete the three stand-ins. ~1-2 KB binary
+recovered.
+
+### Changed
+
+- `src/filter.cyr` — `_phase_esc_init` reads `ANUENUE_COLOR_MODE`
+  and branches between four payload encoders (TRUECOLOR via
+  `tty_fg_rgb_buf`, COLOR_256 via `_fg_256_buf_compat`,
+  COLOR_16 via `_sgr_buf_compat`, MONO → zero-length entries
+  unreached because main.cyr dispatches to passthrough first).
+- `src/main.cyr` — three new flags; new dispatch step calls
+  `anuenue_detect_color_mode` and writes `ANUENUE_COLOR_MODE`
+  before filter/animate run; MONO routes to `anuenue_passthrough`.
+- `scripts/golden-check.sh` — fixtures invoke with explicit
+  `--color=24bit` so they're deterministic regardless of the
+  runner's TTY state. New M6 fixtures + MONO acceptance.
+- `scripts/animate-smoke.sh` — invokes with `--color=24bit` for
+  the same reason; animation always exercises the truecolor path.
+- `scripts/perf-bench.sh` — invokes with `--color=24bit` to bench
+  the filter path, not MONO passthrough. Methodology comparable
+  with the v0.6.0 figures.
+- `tests/anuenue.tcyr` — now also includes `src/color.cyr`.
+
+### Performance
+
+`scripts/perf-bench.sh` (truecolor) is unchanged from v0.6.0
+within host noise: ASCII no-LF ≈ 46.5 ns/byte; UTF-8 mixed
+≈ 43 ns/byte. MONO is observably as fast as `cat` (perf-bench
+without `--color=24bit` shows 0 ns/byte overhead — the
+passthrough surface is read(0) + write(1) only).
+
+### Capability surface
+
+Filter path (when colour active): unchanged from v0.6.0 —
+read(0) / write(1) / brk(12) / exit(60) / open(2)+read+close on
+`/proc/self/cmdline` (args_init) and now on `/proc/self/environ`
+(getenv at startup). Animation path keeps its M4 deltas
+(rt_sigprocmask, signalfd4, nanosleep). M8 audit will record the
+v0.7.0 set as the v1.0 candidate.
+
+### Binary
+
+DCE size: 335 160 → **349 832 bytes** (+14 672 B for the M6
+color module + flag wiring + stdlib pulls — `streq`, `strstr`,
+`getenv`). 168 B headroom under the M5 cap of 350 KB; the darshana
+0.5.3 sandhi will recover ~1-2 KB when the three stand-ins go.
+M6-and-beyond cap should be raised in the M7 closeout — 512 KB
+gives clear runway through v1.0 without changing the discipline.
+
 ## [0.6.0] — 2026-05-22 — M5: Performance Pass
 
 The hot-path-recovery cut. Three layered optimisations against the
