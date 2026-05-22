@@ -346,6 +346,99 @@ fn main(): i64 {
     assert_eq(cp_is_regional_indicator(0x1F200), 0, "U+1F200 → no");
     assert_eq(cp_is_regional_indicator(0x1F308), 0, "🌈 → no");
 
+    # ---- v0.6.0 — M5 perf pass --------------------------------------
+    # Phase-cached escape buffer. The fast path replaces
+    # `hsv_rainbow + tty_fg_rgb_buf` per cluster with a memcpy from
+    # _PHASE_ESC_TABLE[phase % MOD]. The unit-test contract: every
+    # entry in the table is byte-identical to what the runtime path
+    # would have produced. Build the table, then for each canonical
+    # phase compare the cached entry against a fresh runtime emit.
+    test_group("M5 perf — phase-cached escape table");
+    assert_eq(_phase_esc_init(), 0, "_phase_esc_init returns 0 on success");
+    assert(_PHASE_ESC_TABLE != 0, "table pointer non-null after init");
+    # Idempotent: second call is a no-op (table already built).
+    assert_eq(_phase_esc_init(), 0, "_phase_esc_init idempotent");
+
+    # Per-entry round-trip: for each canonical hue boundary, the
+    # cached escape's bytes match a freshly-computed tty_fg_rgb_buf
+    # emission. Six canonical hues + the wraparound corner cover
+    # 1/2/3-digit channel encodings.
+    var pe_rgb[24];
+    var pe_fresh[32];
+    var pe_dst[32];
+    var pe_phases[8];
+    store64(&pe_phases + 0 * 8, 0);     # red
+    store64(&pe_phases + 1 * 8, 255);   # yellow
+    store64(&pe_phases + 2 * 8, 510);   # green
+    store64(&pe_phases + 3 * 8, 765);   # cyan
+    store64(&pe_phases + 4 * 8, 1020);  # blue
+    store64(&pe_phases + 5 * 8, 1275);  # magenta
+    store64(&pe_phases + 6 * 8, 1529);  # last entry before wrap
+    store64(&pe_phases + 7 * 8, 7);     # default -p step value
+
+    var pi = 0;
+    while (pi < 8) {
+        var phase = load64(&pe_phases + pi * 8);
+        # Runtime path for comparison.
+        hsv_rainbow(phase, &pe_rgb);
+        var fresh_len = tty_fg_rgb_buf(&pe_fresh, 0,
+                                       load64(&pe_rgb + 0),
+                                       load64(&pe_rgb + 8),
+                                       load64(&pe_rgb + 16));
+        # Cached path: _emit_phase_esc writes elen bytes starting at
+        # `pos` into the buffer and returns `pos + elen`.
+        var cached_pos = _emit_phase_esc(&pe_dst, 0, phase);
+        assert_eq(cached_pos, fresh_len, "cached length matches runtime length");
+        var bi = 0;
+        var bytes_ok = 1;
+        while (bi < fresh_len) {
+            if (load8(&pe_dst + bi) != load8(&pe_fresh + bi)) { bytes_ok = 0; }
+            bi = bi + 1;
+        }
+        assert_eq(bytes_ok, 1, "cached escape bytes byte-identical to runtime");
+        pi = pi + 1;
+    }
+
+    # Phase normalization: negative and >MOD phases should hit the
+    # same cached entries as their canonical [0, MOD) representatives.
+    var n_pos = _emit_phase_esc(&pe_dst, 0, 0);
+    var n_neg = _emit_phase_esc(&pe_fresh, 0, 0 - ANUENUE_PHASE_MOD);
+    assert_eq(n_pos, n_neg, "phase = -MOD == phase = 0 (same length)");
+    var nb = 0;
+    var n_match = 1;
+    while (nb < n_pos) {
+        if (load8(&pe_dst + nb) != load8(&pe_fresh + nb)) { n_match = 0; }
+        nb = nb + 1;
+    }
+    assert_eq(n_match, 1, "phase = -MOD byte-identical to phase = 0");
+
+    var w_canon = _emit_phase_esc(&pe_dst, 0, 7);
+    var w_over  = _emit_phase_esc(&pe_fresh, 0, 7 + ANUENUE_PHASE_MOD * 3);
+    assert_eq(w_canon, w_over, "phase = 7 + 3*MOD == phase = 7 (same length)");
+    var wb = 0;
+    var w_match = 1;
+    while (wb < w_canon) {
+        if (load8(&pe_dst + wb) != load8(&pe_fresh + wb)) { w_match = 0; }
+        wb = wb + 1;
+    }
+    assert_eq(w_match, 1, "phase = 7 + 3*MOD byte-identical to phase = 7");
+
+    # Table layout sanity: 32-byte stride matches the documented
+    # cache-line discipline; entry length is always 13..19 (the
+    # truecolor SGR envelope).
+    assert_eq(ANUENUE_ESC_TABLE_ENTRY_SIZE, 32, "entry size = 32 bytes (cache line stride)");
+    var len_min = 99;
+    var len_max = 0;
+    var li = 0;
+    while (li < ANUENUE_PHASE_MOD) {
+        var elen = load64(_PHASE_ESC_TABLE + li * ANUENUE_ESC_TABLE_ENTRY_SIZE);
+        if (elen < len_min) { len_min = elen; }
+        if (elen > len_max) { len_max = elen; }
+        li = li + 1;
+    }
+    assert(len_min >= 13, "min entry length ≥ 13 (truecolor SGR floor)");
+    assert(len_max <= 19, "max entry length ≤ 19 (truecolor SGR ceiling)");
+
     # ---- v0.5.0 — M4 animation surface ------------------------------
     # Cluster pre-tagging and helper math. The frame loop, signalfd,
     # and sleep cadence resist unit-level testing — they go through

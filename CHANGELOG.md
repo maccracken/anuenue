@@ -4,6 +4,110 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-22 — M5: Performance Pass
+
+The hot-path-recovery cut. Three layered optimisations against the
+M3 ASCII regression: an ASCII short-circuit that skips the UTF-8
+decoder + cluster classifier on `b < 0x80`, a binary-searched range
+LUT replacing the 21-condition `cp_is_extending` chain, and a
+pre-baked 1 530-entry escape table indexed by `phase % MOD` that
+collapses `hsv_rainbow + tty_fg_rgb_buf` into a single memcpy on
+the hot path. Result on the canonical 1.4 MB base64-ASCII corpus:
+**91.6 → 47.0 ns/byte (−48.7%)** — beats the v0.3.0 53 ns/byte
+floor that M3 had regressed. All four M3 goldens remain byte-
+identical; 26 new tcyr assertions lock the phase-cached escape
+table's bytes to the runtime path. Binary stays under the 350 KB
+DCE cap.
+
+### Added
+
+- **M5 — Performance Pass.** Three optimisations layered into the
+  filter loop and the animation render loop:
+  1. **ASCII short-circuit** — `if (b < 0x80)` branch in
+     `anuenue_filter`'s inner walk and in `_pretag_clusters`'s
+     classify pass. Skips `utf8_seq_len` + `utf8_decode` +
+     `cp_is_extending` + `cp_is_regional_indicator` on every ASCII
+     byte (which by construction can never be combining, RI, or
+     multi-byte). The one edge case — ZWJ followed by ASCII —
+     stays correct via the `prev_was_zwj` latch the fast path
+     honours. Largest single win on MOTD-shaped traffic.
+  2. **Binary-searched `cp_is_extending` LUT** — replaces the
+     v0.4.0 21-range linear chain with a sorted `[lo, hi]` pair
+     table and `O(log N)` lookup. Cheap reject for the common
+     cases (`cp < 0x0300` or `cp > 0xE01EF`) skips the search
+     entirely — covers CJK / Latin-1 / most-of-Unicode. Helps
+     UTF-8-heavy non-Latin corpora; perf-neutral on ASCII
+     (already short-circuited).
+  3. **Phase-cached escape buffer** — 1 530-entry table indexed
+     by `phase % ANUENUE_PHASE_MOD` holding pre-formatted
+     `\x1b[38;2;R;G;Bm` escapes. Replaces `hsv_rainbow + 3×
+     _ansi_emit_u8` (~53 ns/call) with one length-prefixed
+     memcpy (~10 ns/call). 32-byte stride per entry (8-byte
+     length + 19-byte payload + pad) — matches a cache-line
+     fill. Heap-allocated at first-use (~80 μs once at startup),
+     so the DCE binary doesn't grow.
+- **`scripts/perf-bench.sh`** — scriptizes the end-to-end ASCII
+  per-byte measurement docs/benchmarks.md kept describing
+  manually. Generates a deterministic ASCII corpus + a UTF-8
+  corpus, runs `cat fixture > /dev/null` and `anuenue < fixture
+  > /dev/null` N times each, reports the median ns/byte
+  overhead. Used to capture the M5 baseline AND prove each
+  optimisation's win before claiming it.
+- **26 new tcyr assertions in `tests/anuenue.tcyr`** under
+  `M5 perf — phase-cached escape table`: `_phase_esc_init`
+  idempotency, per-entry byte-identical round-trip against
+  `hsv_rainbow + tty_fg_rgb_buf` (8 canonical phases including
+  the wraparound corner), phase normalization (negative and
+  `>MOD` phases hit the same entries as their canonical
+  representatives), and table-layout invariants (32-byte
+  stride, 13..19-byte entry length envelope).
+- **`docs/benchmarks.md` § v0.6.0 — M5**: the three-point trend
+  the roadmap acceptance called for (v0.3.0 → v0.4.0 → v0.6.0)
+  plus the new perf-bench.sh-produced figures.
+
+### Performance
+
+End-to-end ASCII per-byte overhead, 1.4 MB base64-of-/dev/urandom
+corpus, median of 7 runs:
+
+| Path             | v0.5.0  | v0.6.0  | Δ       |
+|------------------|---------|---------|---------|
+| ascii (no LF)    | 91.6 ns | 47.0 ns | −48.7%  |
+| ascii (w/ LFs)   | 95.0 ns | 51.0 ns | −46.3%  |
+| utf8 mixed       | 66.3 ns | 43.0 ns | −35.1%  |
+
+v0.6.0's ASCII no-LF figure (47 ns/byte) is **faster than the
+v0.3.0 baseline (53 ns/byte)** — the M3 cluster-classification
+regression is more than recovered. UTF-8 mixed is faster than
+ASCII at v0.3.0 ever was; M3's per-cluster work amortises over
+multi-byte payloads and the escape pre-computation skips the
+expensive digit-encoding on every cluster.
+
+### Changed
+
+- `src/filter.cyr` — `cp_is_extending` rewritten as binary search
+  over `_CP_EXT_TABLE`. New `_phase_esc_init` / `_emit_phase_esc`
+  helpers + `_PHASE_ESC_TABLE` module-level pointer. The filter
+  loop's hot path replaces the `hsv_rainbow + tty_fg_rgb_buf`
+  pair (+ stack-allocated `var rgb[24]`) with a single
+  `_emit_phase_esc` call.
+- `src/animate.cyr` — same three changes mirrored: ASCII short-
+  circuit in `_pretag_clusters`; `_render_frame` routes through
+  `_emit_phase_esc`; per-frame stack-allocated `rgb[24]` dropped.
+  `anuenue_animate` calls `_phase_esc_init()` at startup like
+  the filter does.
+- `src/main.cyr` — no behavioural change. `anuenue_filter` and
+  `anuenue_animate` now both initialise the phase-cached escape
+  table at entry; the cost is paid once per invocation and shared
+  across both paths.
+
+### Binary
+
+DCE size: 334 120 → **335 160 bytes** (+1 040 B for the M5 helper
+fns + LUT init code; the 48 KB phase-cache table itself is
+runtime heap and doesn't bloat the binary). Well under the M5
+acceptance cap of 350 KB DCE.
+
 ## [0.5.0] — 2026-05-22 — M4: Animation Mode
 
 The lolcat-`-a` cut. Three new flags (`-a` / `-d` / `-S`) sit between

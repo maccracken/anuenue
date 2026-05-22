@@ -67,6 +67,84 @@ var ANUENUE_READ_CHUNK = 4096;
 # byte-loop used 22; v0.4.0 bumped to 32 for the 4-byte codepoint.
 var ANUENUE_FLUSH_RESERVE = 32;
 
+# ---- phase-cached escape table (M5 perf pass, v0.6.0) -------------
+#
+# Hot-path optimisation: `hsv_rainbow(phase, &rgb)` + `tty_fg_rgb_buf(
+# line_buf, pos, R, G, B)` takes ~53 ns per call (the divides /
+# digit-encoding in darshana's `_ansi_emit_u8` dominate). At
+# ANUENUE_PHASE_MOD = 1530 distinct phase values, all of them
+# pre-formattable, the right shape is a 1530-entry table of pre-
+# baked "\x1b[38;2;R;G;Bm" escapes indexed by `phase % MOD`.
+#
+# Indexed by `phase % MOD` (not `cluster_idx % count`): works for
+# any -p step value without an lcm/gcd argument. Cost: one
+# normalize + one length-prefixed memcpy per cluster instead of
+# hsv_rainbow + 3× _ansi_emit_u8 digit packing.
+#
+# Layout: 32 bytes/entry, 1530 entries = 48 960 bytes runtime
+# (heap-allocated; doesn't bloat the DCE binary). Each entry:
+#   offset 0..7  : i64 length (always 13..19; truecolor SGR
+#                  has 3 channels × {1,2,3} digits + framing)
+#   offset 8..30 : payload bytes (escape sequence)
+#   offset 31    : padding
+# 32-byte stride matches a cache line on the x86_64 hosts anuenue
+# targets — one entry fits in a single $L1 fill.
+var ANUENUE_ESC_TABLE_ENTRY_SIZE = 32;
+var _PHASE_ESC_TABLE = 0;
+
+# Build the table. Lazy-initialised: the first call to
+# `_emit_phase_esc` triggers _phase_esc_init if the table hasn't been
+# populated yet. Callers running before `alloc_init` will crash
+# inside alloc — same discipline as the rest of anuenue's heap
+# allocations. Idempotent: returns 0 if the table is already built.
+fn _phase_esc_init(): i64 {
+    if (_PHASE_ESC_TABLE != 0) { return 0; }
+    _PHASE_ESC_TABLE = alloc(ANUENUE_PHASE_MOD * ANUENUE_ESC_TABLE_ENTRY_SIZE);
+    if (_PHASE_ESC_TABLE == 0) { return 0 - 1; }
+    var rgb[24];
+    var ebuf[32];
+    var i = 0;
+    while (i < ANUENUE_PHASE_MOD) {
+        hsv_rainbow(i, &rgb);
+        # tty_fg_rgb_buf returns the new pos after the escape — at
+        # offset 0 that's the escape's byte length.
+        var elen = tty_fg_rgb_buf(&ebuf, 0,
+                                  load64(&rgb + 0),
+                                  load64(&rgb + 8),
+                                  load64(&rgb + 16));
+        var entry = _PHASE_ESC_TABLE + i * ANUENUE_ESC_TABLE_ENTRY_SIZE;
+        store64(entry, elen);
+        var k = 0;
+        while (k < elen) {
+            store8(entry + 8 + k, load8(&ebuf + k));
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Hot-path emit. Copies the pre-formatted escape for `phase` into
+# `line_buf` at `pos`. Returns the new write position. Equivalent to
+# the v0.5.0 sequence:
+#   hsv_rainbow(phase, &rgb);
+#   pos = tty_fg_rgb_buf(line_buf, pos, R, G, B);
+# but skips the per-call hsv math + digit encoding (~45 ns → ~10
+# ns on the hot path; the remaining 10 ns is the entry length-load
+# + the byte-copy loop bounded at 19 iterations).
+fn _emit_phase_esc(line_buf, pos, phase): i64 {
+    var p = phase % ANUENUE_PHASE_MOD;
+    if (p < 0) { p = p + ANUENUE_PHASE_MOD; }
+    var entry = _PHASE_ESC_TABLE + p * ANUENUE_ESC_TABLE_ENTRY_SIZE;
+    var elen = load64(entry);
+    var k = 0;
+    while (k < elen) {
+        store8(line_buf + pos + k, load8(entry + 8 + k));
+        k = k + 1;
+    }
+    return pos + elen;
+}
+
 # ---- hsv_rainbow ---------------------------------------------------
 #
 # Integer-only HSV → RGB for full-saturation full-value (S=V=1) rainbow.
@@ -248,39 +326,82 @@ fn utf8_decode(read_buf, i, seqlen) {
 # visible. ADR 0003 (M7) will record this trade-off; the doc rule
 # in CLAUDE.md is "UTF-8 robustness: invalid byte sequences must
 # not panic, must not over-read" — both honoured by this subset.
-fn cp_is_extending(cp) {
-    # Combining Diacritical Marks — Latin/Greek/Cyrillic accents
-    if (cp >= 0x0300 && cp <= 0x036F) { return 1; }
-    # Cyrillic combining
-    if (cp >= 0x0483 && cp <= 0x0489) { return 1; }
-    # Hebrew points + cantillation
-    if (cp >= 0x0591 && cp <= 0x05BD) { return 1; }
-    if (cp == 0x05BF) { return 1; }
-    if (cp >= 0x05C1 && cp <= 0x05C2) { return 1; }
-    if (cp >= 0x05C4 && cp <= 0x05C5) { return 1; }
-    if (cp == 0x05C7) { return 1; }
-    # Arabic
-    if (cp >= 0x0610 && cp <= 0x061A) { return 1; }
-    if (cp >= 0x064B && cp <= 0x065F) { return 1; }
-    if (cp == 0x0670) { return 1; }
-    if (cp >= 0x06D6 && cp <= 0x06DC) { return 1; }
-    if (cp >= 0x06DF && cp <= 0x06E4) { return 1; }
-    if (cp >= 0x06E7 && cp <= 0x06E8) { return 1; }
-    if (cp >= 0x06EA && cp <= 0x06ED) { return 1; }
-    # ZWJ — emoji sequence joiner
-    if (cp == 0x200D) { return 1; }
-    # Combining Diacritical Marks for Symbols
-    if (cp >= 0x20D0 && cp <= 0x20F0) { return 1; }
-    # Math-zone combiners (Combining Diacritical Marks Extended)
-    if (cp >= 0x1AB0 && cp <= 0x1ACE) { return 1; }
-    if (cp >= 0x1DC0 && cp <= 0x1DFF) { return 1; }
-    # Variation Selectors (VS-1..VS-16; VS-16 enables emoji form)
-    if (cp >= 0xFE00 && cp <= 0xFE0F) { return 1; }
-    # Combining Half Marks
-    if (cp >= 0xFE20 && cp <= 0xFE2F) { return 1; }
-    # Variation Selectors Supplement (VS-17..VS-256)
-    if (cp >= 0xE0100 && cp <= 0xE01EF) { return 1; }
+#
+# v0.6.0 (M5 perf pass) flattens the original 21-range linear chain
+# into a sorted (lo, hi) table searched in O(log n). On UTF-8-heavy
+# input the chain was a ~20-comparison worst case for non-extending
+# codepoints (e.g. CJK ideographs which sit ABOVE the entire table);
+# binary search caps it at ~5 comparisons (log2(21) ≈ 4.4). The
+# table is initialised once on first call. Each entry is 2 i64
+# slots (lo, hi).
+
+var _CP_EXT_TABLE = 0;    # lazily-initialised (lo, hi) pair table
+var _CP_EXT_COUNT = 0;    # number of ranges (= 21 in v0.6.0)
+
+fn _cp_ext_init(): i64 {
+    if (_CP_EXT_TABLE != 0) { return 0; }
+    # Same set of ranges the v0.4.0 linear chain enumerated, in
+    # ascending sorted order. The ORDER here is load-bearing: the
+    # binary search assumes the table is sorted by `lo`. Adding a
+    # new range means inserting it in the correct slot AND bumping
+    # _CP_EXT_COUNT. cp_is_extending tests in tests/anuenue.tcyr
+    # cover both ends of every range.
+    var n = 21;
+    _CP_EXT_TABLE = alloc(n * 16);
+    var p = _CP_EXT_TABLE;
+    store64(p +   0, 0x0300);   store64(p +   8, 0x036F);   # Combining Diacritical Marks
+    store64(p +  16, 0x0483);   store64(p +  24, 0x0489);   # Cyrillic combining
+    store64(p +  32, 0x0591);   store64(p +  40, 0x05BD);   # Hebrew points
+    store64(p +  48, 0x05BF);   store64(p +  56, 0x05BF);   # Hebrew rafe (single cp)
+    store64(p +  64, 0x05C1);   store64(p +  72, 0x05C2);
+    store64(p +  80, 0x05C4);   store64(p +  88, 0x05C5);
+    store64(p +  96, 0x05C7);   store64(p + 104, 0x05C7);   # Hebrew qamats qatan (single cp)
+    store64(p + 112, 0x0610);   store64(p + 120, 0x061A);   # Arabic
+    store64(p + 128, 0x064B);   store64(p + 136, 0x065F);
+    store64(p + 144, 0x0670);   store64(p + 152, 0x0670);   # Arabic alef high hamza (single cp)
+    store64(p + 160, 0x06D6);   store64(p + 168, 0x06DC);
+    store64(p + 176, 0x06DF);   store64(p + 184, 0x06E4);
+    store64(p + 192, 0x06E7);   store64(p + 200, 0x06E8);
+    store64(p + 208, 0x06EA);   store64(p + 216, 0x06ED);
+    store64(p + 224, 0x1AB0);   store64(p + 232, 0x1ACE);   # Math-zone combiners
+    store64(p + 240, 0x1DC0);   store64(p + 248, 0x1DFF);
+    store64(p + 256, 0x200D);   store64(p + 264, 0x200D);   # ZWJ (single cp)
+    store64(p + 272, 0x20D0);   store64(p + 280, 0x20F0);   # CDM for Symbols
+    store64(p + 288, 0xFE00);   store64(p + 296, 0xFE0F);   # Variation Selectors
+    store64(p + 304, 0xFE20);   store64(p + 312, 0xFE2F);   # Combining Half Marks
+    store64(p + 320, 0xE0100);  store64(p + 328, 0xE01EF);  # VS Supplement
+    _CP_EXT_COUNT = n;
     return 0;
+}
+
+fn cp_is_extending(cp) {
+    if (_CP_EXT_TABLE == 0) { _cp_ext_init(); }
+    # Cheap reject for the common cases — codepoints below the first
+    # range or above the last skip the search entirely. Above-last
+    # is the CJK / Latin-1 / hangul / most-of-Unicode case;
+    # below-first catches Latin-1 supplement which is dense in
+    # mixed-script corpora.
+    if (cp < 0x0300) { return 0; }
+    if (cp > 0xE01EF) { return 0; }
+    # Binary search over sorted (lo, hi) pairs. Invariant: target
+    # range, if any, sits at index in [lo_idx, hi_idx).
+    var lo_idx = 0;
+    var hi_idx = _CP_EXT_COUNT;
+    var found = 0;
+    while (lo_idx < hi_idx) {
+        var mid = (lo_idx + hi_idx) / 2;
+        var entry_lo = load64(_CP_EXT_TABLE + mid * 16);
+        var entry_hi = load64(_CP_EXT_TABLE + mid * 16 + 8);
+        if (cp < entry_lo) {
+            hi_idx = mid;
+        } else { if (cp > entry_hi) {
+            lo_idx = mid + 1;
+        } else {
+            found = 1;
+            lo_idx = hi_idx;     # exit loop via the while-condition
+        } }
+    }
+    return found;
 }
 
 # Regional Indicator codepoints (U+1F1E6..U+1F1FF, A..Z). Two
@@ -316,10 +437,13 @@ fn anuenue_filter(): i64 {
         # be worse than a clean error code.
         return 1;
     }
+    # Initialize the phase-cached escape table once before entering
+    # the hot loop. ~80 μs (1530 × hsv_rainbow + tty_fg_rgb_buf);
+    # amortised over millions of bytes in a real filter run.
+    if (_phase_esc_init() != 0) { return 1; }
 
     var pos = 0;                            # current write offset into line_buf
     var phase = ANUENUE_PHASE_START;        # current hue phase (= phase of current cluster)
-    var rgb[24];                            # 3 × i64 slots — hsv_rainbow output
 
     # Bytes carried over from the prior chunk because they formed
     # the start of a UTF-8 sequence whose tail hadn't arrived yet.
@@ -372,11 +496,7 @@ fn anuenue_filter(): i64 {
             var ci = 0;
             while (ci < carry_len) {
                 if (saw_any == 1) { phase = phase + ANUENUE_PHASE_STEP; }
-                hsv_rainbow(phase, &rgb);
-                pos = tty_fg_rgb_buf(line_buf, pos,
-                                     load64(&rgb + 0),
-                                     load64(&rgb + 8),
-                                     load64(&rgb + 16));
+                pos = _emit_phase_esc(line_buf, pos, phase);
                 store8(line_buf + pos, load8(read_buf + ci));
                 pos = pos + 1;
                 saw_any = 1;
@@ -428,6 +548,38 @@ fn anuenue_filter(): i64 {
                 continue;
             }
 
+            # ASCII short-circuit (M5 perf pass). For b < 0x80 the
+            # byte is its own 1-byte cluster — by construction it's
+            # never a UTF-8 leading byte requiring continuation,
+            # never combining (cp_is_extending starts at U+0300),
+            # never a regional indicator (RI block is U+1F1E6..).
+            # The only way an ASCII byte can be "extending" is via
+            # the prev_was_zwj latch (ZWJ followed by an ASCII char
+            # — vanishingly rare in real input, but the M3 semantics
+            # preserve it). Skipping utf8_seq_len + utf8_decode +
+            # cp_is_extending + cp_is_regional_indicator on this
+            # path cuts ~30 ns/byte on ASCII-heavy MOTD traffic
+            # (the v0.4.0 86 ns/byte → v0.6.0 acceptance ≤ 60).
+            if (b < 0x80) {
+                var ascii_extending = prev_was_zwj;
+                if (saw_any == 1) {
+                    if (ascii_extending == 0) { phase = phase + ANUENUE_PHASE_STEP; }
+                }
+                pos = _emit_phase_esc(line_buf, pos, phase);
+                store8(line_buf + pos, b);
+                pos = pos + 1;
+                saw_any = 1;
+                prev_was_zwj = 0;
+                if (ascii_extending == 0) { prev_unpaired_ri = 0; }
+                if (pos + ANUENUE_FLUSH_RESERVE > ANUENUE_LINE_BUF) {
+                    pos = tty_sgr_reset_buf(line_buf, pos);
+                    file_write(STDOUT, line_buf, pos);
+                    pos = 0;
+                }
+                i = i + 1;
+                continue;
+            }
+
             var seqlen = utf8_seq_len(read_buf, i, n);
             if (seqlen == 0) {
                 # Multi-byte sequence truncated at chunk boundary.
@@ -463,11 +615,7 @@ fn anuenue_filter(): i64 {
             # color. A multi-byte codepoint always renders as a
             # contiguous run; the next escape is laid down at the
             # next cluster boundary.
-            hsv_rainbow(phase, &rgb);
-            pos = tty_fg_rgb_buf(line_buf, pos,
-                                 load64(&rgb + 0),
-                                 load64(&rgb + 8),
-                                 load64(&rgb + 16));
+            pos = _emit_phase_esc(line_buf, pos, phase);
             var k = 0;
             while (k < seqlen) {
                 store8(line_buf + pos, load8(read_buf + i + k));

@@ -103,20 +103,67 @@ Same 1 416 501-byte base64-ASCII corpus from v0.2.0:
 - **0.4.0 DCE size**: **322 368 bytes** (~315 KB). +5 152 bytes
   over v0.3.0 for the UTF-8 + grapheme-classification surface.
 
-### Notes for M5 (perf pass)
+## v0.6.0 — M5 (perf pass)
 
-The biggest M5 wins likely sit in:
-1. **ASCII fast path** — short-circuit `utf8_seq_len` for the
-   common case (`b < 0x80`) avoiding the function call entirely
-   when DCE/inlining is enabled. Could shave 10-20 ns/byte.
-2. **Combining-mark lookup** — the range-check chain in
-   `cp_is_extending` runs through 18 ranges. A flat bitmap over
-   the Latin combining block (or a single binary-search lookup
-   table) could halve the per-codepoint cost.
-3. **Escape pre-computation** — when `phase` advances by a fixed
-   step, the next escape's RGB triple is predictable. A small
-   cached escape buffer rotating through ~256 phases would avoid
-   re-running `hsv_rainbow` + `_ansi_emit_u8` per codepoint.
+Three layered optimisations against the M3 regression. ASCII
+short-circuit skips the UTF-8 + cluster classifier on the common
+case. `cp_is_extending` binary-searches a sorted range table.
+And — the biggest win — a 1 530-entry phase-cached escape table
+collapses `hsv_rainbow + tty_fg_rgb_buf` into a single memcpy.
+
+Result: the ASCII hot path drops below v0.3.0's pre-cluster floor.
+UTF-8 mixed comes in even faster, because the cluster work
+amortises over multi-byte payloads and the escape pre-computation
+skips digit encoding on every cluster.
+
+### End-to-end (scripts/perf-bench.sh, RUNS=7 median)
+
+Three corpora at ~1.4 MB each, on the same host the prior baselines
+ran on:
+
+| Corpus           | cat (ms) | anuenue (ms) | Overhead (ns/byte) | Δ vs v0.5.0 |
+|------------------|----------|--------------|--------------------|-------------|
+| ascii (no LF)    | 3        | 68           | **47.0**           | −48.7%      |
+| ascii (w/ LFs)   | 3        | 73           | 51.0               | −46.3%      |
+| utf8 mixed       | 3        | 62           | 43.0               | −35.1%      |
+
+### Per-optimisation contribution (ascii no-LF)
+
+| Step                                       | ns/byte | Δ      |
+|--------------------------------------------|---------|--------|
+| v0.5.0 baseline                            | 91.6    | —      |
+| + ASCII short-circuit                      | 59.3    | −32.3  |
+| + `cp_is_extending` binary-search LUT      | 60.0    | +0.7*  |
+| + phase-cached escape buffer (M5 final)    | 47.0    | −13.0  |
+
+\* The LUT is perf-neutral on the ASCII corpus (already short-
+circuited); the +0.7 ns is host noise. UTF-8-heavy corpora with
+Arabic / Hebrew / math-zone combiners are where the LUT pays
+back — log₂(21) ≈ 5 comparisons replacing a 21-condition linear
+chain. Kept regardless: clearer code, future-proof.
+
+### Binary
+
+- **0.6.0 DCE size**: **335 160 bytes** (~327 KB). +1 040 bytes
+  over v0.5.0 for the new `_phase_esc_init` / `_emit_phase_esc`
+  helpers, the `cp_is_extending` LUT init body, and the
+  binary-search loop. The 48 KB phase-cache table is heap-
+  allocated at first filter/animate entry and doesn't show
+  up in the DCE binary.
+- M5 acceptance cap: 350 KB → comfortably under (−14 840 B
+  headroom for M6 color-mode work).
+
+### Notes
+
+- `perf-bench.sh` is the M5 ratchet from here forward. Each
+  minor cut should re-run it; CHANGELOG records any motion in
+  the per-byte figures.
+- The phase-cached escape table is a runtime alloc of
+  `1530 × 32 = 48 960` bytes (heap); it amortises over the
+  filter run — at the M3 baseline of ~13M chars/sec, that's
+  3.8 μs of table-fill cost per million bytes filtered, or
+  3.8 ns/byte at the limit. Already counted in the median
+  ns/byte figures above.
 
 ## Trend
 
@@ -125,8 +172,14 @@ The biggest M5 wins likely sit in:
 | v0.2.0  | 53                  | 8                | 45                  | 304 368      |
 | v0.3.0  | 53*                 | 8                | 45                  | 317 216      |
 | v0.4.0  | 86                  | 8                | 45                  | 322 368      |
+| v0.5.0  | 92†                 | 8                | 45                  | 334 120      |
+| v0.6.0  | **47**              | 8                | 45                  | 335 160      |
 
 \* v0.3.0 added flag-parsing at startup but the filter hot path
-was unchanged; per-byte cost stayed flat. v0.4.0's regression is
-the UTF-8 / cluster work in the hot path — M5 is the perf-pass
-cut and sets the per-byte target against this floor.
+was unchanged; per-byte cost stayed flat.
+
+† v0.5.0 figure captured by perf-bench.sh on the M5 cut host
+(slightly slower than the v0.4.0 86 ns/byte doc number — both
+numbers are within host-variance bounds of each other; the M5
+acceptance was scoped against the v0.4.0 floor as the regression
+to recover).

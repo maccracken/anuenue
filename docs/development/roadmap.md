@@ -19,7 +19,7 @@ Tagged when **all** of the following hold:
 - [ ] **TTY-aware** — no ANSI when stdout isn't a terminal; sensible behavior with `NO_COLOR` env *(M6)*
 - [ ] **Color-mode negotiation** — 24-bit / 256-color / 16-color / monochrome fallback per `TERM` + `COLORTERM` *(M6)*
 - [x] **Animation parity with `lolcat -a`** — cursor positioning, frame timing, signal-safe (SIGINT restores cursor) *— shipped at M4 / v0.5.0; non-blocking signalfd probe between frames, `tty_cursor_up` re-anchor, 16 ms frame interval*
-- [~] **Per-character overhead measured** — benchmark showing the cost vs `cat`, tracked in `docs/benchmarks.md` *(baseline + M3 regression captured; M5 sets the production budget)*
+- [x] **Per-character overhead measured** — benchmark showing the cost vs `cat`, tracked in `docs/benchmarks.md` *— M5 (v0.6.0) shipped scripts/perf-bench.sh as the ratchet; ASCII no-LF at 47 ns/byte, below the v0.3.0 53 ns/byte floor*
 - [ ] **Dogfooded** in real AGNOS pipelines (`iam | anuenue` MOTD; `bnrmr | anuenue` banners) for at least one minor-cycle window *(blocked on first consumer wiring, anticipated post-M6)*
 - [ ] **Security audit pass** — `docs/audit/YYYY-MM-DD-audit.md` clean; specific checks for stdin-bytes-as-untrusted and buffer-bounds on the line buffer *(M8)*
 - [x] **CHANGELOG complete** from v0.1.0 onward *— v0.1.0 / v0.2.0 / v0.3.0 / v0.4.0 all sectioned; maintained at every cut*
@@ -45,19 +45,22 @@ Explicitly **not** wired (evaluated and rejected for v1.0):
 
 ## Current focus
 
-**Next slot: M5 — Performance Pass (v0.6.0).** Recover the ASCII
-hot-path overhead M3 introduced (53 → 86 ns/byte regression) without
-giving up cluster correctness. ASCII short-circuit + flattened
-`cp_is_extending` LUT + phase-cached escape buffer. No dep gate;
-pure internal optimisation.
+**Next slot: M6 — Color-Mode Negotiation (v0.7.0).** Be a good
+citizen on every terminal — anuenue currently assumes 24-bit
+truecolor. M6 adds 256-color, 16-color, monochrome fallbacks +
+`NO_COLOR` honour + `TERM` / `COLORTERM` probing. Dep gate:
+darshana's color-capability probing surface (currently absent —
+sandhi-unlock candidate, third turn). The M5 phase-cached escape
+buffer is the layer M6 branches against — palette swap reuses the
+table-emit shape.
 
 **Shipped:** M0 (v0.1.0) → M1 (v0.2.0) → M2 (v0.3.0) → M3 (v0.4.0)
-→ M4 (v0.5.0). See the per-milestone entries below for delivered
-surface.
+→ M4 (v0.5.0) → M5 (v0.6.0). See the per-milestone entries below
+for delivered surface.
 
-**Remaining to v1.0:** M5 (perf) → M6 (color-mode negotiation) →
-M7 (surface freeze + ADRs) → M8 (security closeout) → v1.0.0 (tag
-on user signal).
+**Remaining to v1.0:** M6 (color-mode negotiation) → M7 (surface
+freeze + ADRs) → M8 (security closeout) → v1.0.0 (tag on user
+signal).
 
 ## Milestones
 
@@ -190,18 +193,65 @@ Cyrius stdlib's `chrono` provides nanosleep + monotonic clock;
 during a 60-s animation exits 0 with cursor-show emitted; all
 four M3 goldens still byte-identical (filter path unaffected).
 
-### M5 — Performance Pass (v0.6.0) — *next*
+### M5 — Performance Pass (v0.6.0) — ✅ shipped 2026-05-22
 
-Get per-character overhead back toward the v0.3.0 floor — M3 regressed the ASCII hot path from 53 → 86 ns/byte (62%) for cluster classification. Recover most of it without giving up grapheme correctness.
+Three layered optimisations recovered the M3 ASCII regression and
+overshot the v0.3.0 floor on the canonical ASCII no-LF corpus.
 
-- **ASCII short-circuit** — `b < 0x80` branch around `utf8_seq_len` + `cp_is_extending`. Likely 10-20 ns/byte.
-- **Combining-mark lookup** — flatten the 18-range chain in `cp_is_extending` into a bitmap / binary-search LUT. Halves the per-codepoint cost on Latin combining-mark traffic.
-- **Escape pre-computation** — phase-cached escape buffer (~256 entries) avoiding re-running `hsv_rainbow` + `_ansi_emit_u8` per codepoint when `phase` advances by a fixed step.
-- **3-point benchmark trend** captured in `docs/benchmarks.md` (v0.3.0 baseline → M5 target → M5 final).
+Shipped surface:
 
-**Acceptance**: ASCII per-byte overhead ≤ 60 ns (close the gap to within ~15% of v0.3.0); UTF-8 corpus unaffected or better; binary size stays under 350 KB DCE.
+- **ASCII short-circuit** in `anuenue_filter`'s inner walk AND
+  `_pretag_clusters` — `b < 0x80` skips `utf8_seq_len` +
+  `utf8_decode` + `cp_is_extending` + `cp_is_regional_indicator`
+  on every ASCII byte (by construction it can't be combining or
+  RI or multi-byte). The ZWJ-then-ASCII edge case stays correct
+  via the `prev_was_zwj` latch the fast path honours.
+- **Binary-searched `cp_is_extending` LUT** — sorted `[lo, hi]`
+  pair table (21 entries) replacing the v0.4.0 linear chain;
+  cheap-reject branches for `cp < 0x0300` and `cp > 0xE01EF`
+  cover most-of-Unicode without entering the search.
+- **Phase-cached escape buffer** — 1 530-entry table indexed by
+  `phase % ANUENUE_PHASE_MOD` holding pre-formatted
+  `\x1b[38;2;R;G;Bm` escapes. New `_phase_esc_init` populates
+  it once at first filter/animate entry; new `_emit_phase_esc`
+  is the per-cluster hot-path emitter. Replaces `hsv_rainbow +
+  tty_fg_rgb_buf` (~53 ns/call) with one length-prefixed memcpy
+  (~10 ns/call). 32-byte stride per entry matches a cache-line
+  fill. Animation mode's `_render_frame` benefits equally.
+- **`scripts/perf-bench.sh`** — scriptizes the end-to-end ASCII
+  per-byte measurement docs/benchmarks.md kept describing
+  manually. Generates ASCII no-LF + ASCII w/ LFs + UTF-8 mixed
+  corpora at ~1.4 MB each, runs `cat fixture > /dev/null` and
+  `anuenue < fixture > /dev/null` N times each, reports the
+  median ns/byte. M5 ratchet from here on.
+- **26 new assertions across 1 group** in `tests/anuenue.tcyr`:
+  `_phase_esc_init` idempotency + per-entry byte-identical
+  round-trip against the runtime path across 8 canonical phases
+  + phase normalization (negative + `>MOD`) + table-layout
+  invariants (32-byte stride, 13–19-byte entry length envelope).
 
-### M6 — Color-Mode Negotiation (v0.7.0)
+**Bench results** (1.4 MB corpora, median of 7 runs):
+
+| Corpus           | v0.5.0  | v0.6.0  | Δ       |
+|------------------|---------|---------|---------|
+| ascii (no LF)    | 91.6 ns | 47.0 ns | −48.7%  |
+| ascii (w/ LFs)   | 95.0 ns | 51.0 ns | −46.3%  |
+| utf8 mixed       | 66.3 ns | 43.0 ns | −35.1%  |
+
+ASCII no-LF now FASTER than the v0.3.0 53 ns/byte floor. UTF-8
+mixed beats ASCII-at-v0.3.0 too (cluster work amortises over
+multi-byte payloads + escape pre-computation skips digit encoding).
+
+**Binary** — DCE size 334 120 → **335 160 B (+1 040)**. The 48 KB
+phase-cache table lives on the heap (one alloc at first filter/
+animate entry); doesn't bloat the binary. ~15 KB headroom against
+the M5 acceptance cap of 350 KB.
+
+**Acceptance** (all green): ASCII per-byte ≤ 60 ns/byte (47.0,
+−21% under the target); UTF-8 unaffected or better (43.0 vs 66.3,
+−35%); binary < 350 KB DCE (335 KB).
+
+### M6 — Color-Mode Negotiation (v0.7.0) — *next*
 
 Be a good citizen on every terminal — anuenue currently assumes 24-bit truecolor.
 

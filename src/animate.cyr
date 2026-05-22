@@ -128,6 +128,26 @@ fn _pretag_clusters(buf, n_bytes, ctab, max_clusters): i64 {
             continue;
         }
 
+        # ASCII short-circuit (M5 — mirror of anuenue_filter's fast
+        # path). ASCII bytes are always 1-byte clusters; never
+        # combining; never RI. Only "extending" if the prior cluster
+        # ended on a ZWJ. Skips utf8_seq_len / utf8_decode /
+        # cp_is_extending / cp_is_regional_indicator on every ASCII
+        # byte — same shape change as the filter loop, applied here
+        # so the animation pre-tag walk benefits identically.
+        if (b < 0x80) {
+            var ascii_extending = prev_was_zwj;
+            if (ascii_extending == 0) {
+                store64(ctab + n_clusters * 8, i);
+                n_clusters = n_clusters + 1;
+            }
+            prev_was_zwj = 0;
+            if (ascii_extending == 0) { prev_unpaired_ri = 0; }
+            saw_any = 1;
+            i = i + 1;
+            continue;
+        }
+
         var seqlen = utf8_seq_len(buf, i, n_bytes);
         if (seqlen == 0) {
             # Truncated sequence at input EOF (no next chunk in
@@ -219,7 +239,6 @@ fn _input_ends_with_lf(buf, ctab, n_clusters): i64 {
 fn _render_frame(buf, ctab, n_clusters, phase_base, line_buf, input_ends_with_lf): i64 {
     var pos = 0;
     var phase = phase_base;
-    var rgb[24];
 
     var i = 0;
     while (i < n_clusters) {
@@ -241,12 +260,10 @@ fn _render_frame(buf, ctab, n_clusters, phase_base, line_buf, input_ends_with_lf
             continue;
         }
 
-        # Emit fg escape + cluster bytes under one colour.
-        hsv_rainbow(phase, &rgb);
-        pos = tty_fg_rgb_buf(line_buf, pos,
-                             load64(&rgb + 0),
-                             load64(&rgb + 8),
-                             load64(&rgb + 16));
+        # Emit fg escape + cluster bytes under one colour. M5 (v0.6.0)
+        # routes through the phase-cached escape table — same shape
+        # as the filter loop's hot path.
+        pos = _emit_phase_esc(line_buf, pos, phase);
         var k = 0;
         while (k < clen) {
             store8(line_buf + pos, load8(buf + off + k));
@@ -332,6 +349,8 @@ fn anuenue_animate(duration_secs, speed): i64 {
     if (in_buf == 0 || ctab == 0 || line_buf == 0) {
         return 1;
     }
+    # M5 phase-cached escape table — shared with the filter path.
+    if (_phase_esc_init() != 0) { return 1; }
 
     var n_bytes = _animate_slurp_stdin(in_buf, ANUENUE_ANIMATE_INPUT_MAX);
     if (n_bytes < 0) { return 1; }
