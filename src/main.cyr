@@ -1,10 +1,20 @@
-# anuenue — main entry point
-# Stdlib auto-included via cyrius.cyml
+# anuenue — main entry. M1 (v0.2.0): minimum-viable rainbow pipe filter.
+#
+# Pipe-purity proof: stdin → stdout, per-byte HSV phase cycling,
+# 24-bit ANSI fg via darshana. No file I/O, no network, no fork/exec,
+# no state on disk. Capability surface = read(0) + write(1) + brk(12)
+# + exit(60). Nothing else.
+#
+# The library surface (hsv_rainbow, anuenue_filter, the
+# ANUENUE_* constants) lives in src/filter.cyr so the test suite can
+# pull it in without triggering this file's top-level `main()` call.
+# Stdlib + darshana auto-included via cyrius.cyml.
 
-fn main() {
+include "src/filter.cyr"
+
+fn main(): i64 {
     alloc_init();
-    println("hello from anuenue");
-    return 0;
+    return anuenue_filter();
 }
 
 var r = main();

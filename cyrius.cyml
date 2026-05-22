@@ -23,7 +23,7 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "b
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
 path = "../darshana"
-tag = "0.5.0"
+tag = "0.5.1"
 modules = ["dist/darshana.cyr"]
 
 [deps.sakshi]

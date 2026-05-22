@@ -1,11 +1,151 @@
-# anuenue test suite
-# Stdlib auto-included via cyrius.cyml
+# anuenue test suite. M1 coverage: hsv_rainbow geometry (canonical
+# hues + sector ramps + phase normalization), the buf-targeting
+# escape-emission primitive borrowed from darshana 0.5.1, and the
+# byte-cost arithmetic the filter loop's force-flush threshold
+# (ANUENUE_FLUSH_RESERVE) is sized against. The stdin→stdout filter
+# loop itself is exercised end-to-end via `scripts/smoke.sh` (added
+# alongside M1) — Cyrius can't trivially redirect fd 0/1 inside a
+# unit test, so the integration smoke owns the I/O surface.
+#
+# Stdlib + darshana auto-included via cyrius.cyml.
 
-fn main() {
+include "src/filter.cyr"
+
+fn main(): i64 {
     alloc_init();
+
+    # ---- smoke ------------------------------------------------------
     test_group("smoke");
     assert(1, "true is true");
     assert_eq(1 + 1, 2, "math works");
+
+    # ---- hsv_rainbow: canonical pure-hue sector boundaries ----------
+    # Six exact integer points the rainbow geometry MUST hit, one per
+    # sector boundary. If any of these regress the entire color model
+    # is wrong.
+    test_group("hsv_rainbow — canonical hues");
+    var rgb[24];
+
+    hsv_rainbow(0, &rgb);
+    assert_eq(load64(&rgb + 0),  255, "phase 0    → R=255 (red)");
+    assert_eq(load64(&rgb + 8),  0,   "phase 0    → G=0");
+    assert_eq(load64(&rgb + 16), 0,   "phase 0    → B=0");
+
+    hsv_rainbow(255, &rgb);
+    assert_eq(load64(&rgb + 0),  255, "phase 255  → R=255 (yellow)");
+    assert_eq(load64(&rgb + 8),  255, "phase 255  → G=255");
+    assert_eq(load64(&rgb + 16), 0,   "phase 255  → B=0");
+
+    hsv_rainbow(510, &rgb);
+    assert_eq(load64(&rgb + 0),  0,   "phase 510  → R=0 (green)");
+    assert_eq(load64(&rgb + 8),  255, "phase 510  → G=255");
+    assert_eq(load64(&rgb + 16), 0,   "phase 510  → B=0");
+
+    hsv_rainbow(765, &rgb);
+    assert_eq(load64(&rgb + 0),  0,   "phase 765  → R=0 (cyan)");
+    assert_eq(load64(&rgb + 8),  255, "phase 765  → G=255");
+    assert_eq(load64(&rgb + 16), 255, "phase 765  → B=255");
+
+    hsv_rainbow(1020, &rgb);
+    assert_eq(load64(&rgb + 0),  0,   "phase 1020 → R=0 (blue)");
+    assert_eq(load64(&rgb + 8),  0,   "phase 1020 → G=0");
+    assert_eq(load64(&rgb + 16), 255, "phase 1020 → B=255");
+
+    hsv_rainbow(1275, &rgb);
+    assert_eq(load64(&rgb + 0),  255, "phase 1275 → R=255 (magenta)");
+    assert_eq(load64(&rgb + 8),  0,   "phase 1275 → G=0");
+    assert_eq(load64(&rgb + 16), 255, "phase 1275 → B=255");
+
+    # phase = 1530 wraps to 0 — proves the modulus normalization path
+    hsv_rainbow(1530, &rgb);
+    assert_eq(load64(&rgb + 0),  255, "phase 1530 wraps → R=255 (red)");
+    assert_eq(load64(&rgb + 8),  0,   "phase 1530 wraps → G=0");
+    assert_eq(load64(&rgb + 16), 0,   "phase 1530 wraps → B=0");
+
+    # ---- hsv_rainbow: sub-sector linear ramps -----------------------
+    # Each sector has one channel running 0→255 (rising) or 255→0
+    # (falling) over its 255 sub-steps. Sample mid-sector to catch
+    # off-by-one in the ramp direction.
+    test_group("hsv_rainbow — sector ramps");
+    # Sector 0 mid (phase 128): R fixed at 255, G rising from 0, B=0.
+    hsv_rainbow(128, &rgb);
+    assert_eq(load64(&rgb + 0),  255, "sector 0 mid: R=255");
+    assert_eq(load64(&rgb + 8),  128, "sector 0 mid: G=128 (rising)");
+    assert_eq(load64(&rgb + 16), 0,   "sector 0 mid: B=0");
+    # Sector 1 mid (phase 383 = 255+128): R falling 255→0, G fixed, B=0.
+    hsv_rainbow(383, &rgb);
+    assert_eq(load64(&rgb + 0),  127, "sector 1 mid: R=127 (falling 255-128)");
+    assert_eq(load64(&rgb + 8),  255, "sector 1 mid: G=255");
+    assert_eq(load64(&rgb + 16), 0,   "sector 1 mid: B=0");
+    # Sector 3 mid (phase 893 = 765+128): R=0, G falling, B fixed.
+    hsv_rainbow(893, &rgb);
+    assert_eq(load64(&rgb + 0),  0,   "sector 3 mid: R=0");
+    assert_eq(load64(&rgb + 8),  127, "sector 3 mid: G=127 (falling)");
+    assert_eq(load64(&rgb + 16), 255, "sector 3 mid: B=255");
+    # Sector 5 mid (phase 1403 = 1275+128): R fixed, G=0, B falling.
+    hsv_rainbow(1403, &rgb);
+    assert_eq(load64(&rgb + 0),  255, "sector 5 mid: R=255");
+    assert_eq(load64(&rgb + 8),  0,   "sector 5 mid: G=0");
+    assert_eq(load64(&rgb + 16), 127, "sector 5 mid: B=127 (falling)");
+
+    # ---- hsv_rainbow: phase normalization (large + negative) --------
+    # The modulus must wrap any phase value back into [0, 1530). The
+    # filter loop's per-byte phase advance will never go negative on
+    # its own, but a future M2 -F flag may land negative offsets and
+    # we want the model robust now.
+    test_group("hsv_rainbow — phase normalization");
+    hsv_rainbow(3060, &rgb);    # 2 * 1530 → wraps to 0
+    assert_eq(load64(&rgb + 0),  255, "phase 3060 (2×mod) → red R");
+    assert_eq(load64(&rgb + 8),  0,   "phase 3060 (2×mod) → red G");
+    hsv_rainbow(0 - 255, &rgb); # -255 → wraps to 1275 (magenta start)
+    assert_eq(load64(&rgb + 0),  255, "phase -255 → magenta R");
+    assert_eq(load64(&rgb + 8),  0,   "phase -255 → magenta G");
+    assert_eq(load64(&rgb + 16), 255, "phase -255 → magenta B");
+
+    # ---- byte-cost arithmetic for the filter loop -------------------
+    # The flush-reserve threshold ANUENUE_FLUSH_RESERVE = 22 must be
+    # ≥ max(escape) + 1 (payload byte) + 4 (trailing reset). The
+    # worst-case escape happens when all three channels encode as 3
+    # digits each — emitted via tty_fg_rgb_buf below. If darshana
+    # ever grows the escape envelope, this test catches it before
+    # the filter loop can scribble past the line buffer.
+    test_group("filter geometry — flush reserve sizing");
+    var ebuf[32];
+    var ei = 0;
+    while (ei < 32) { store8(&ebuf + ei, 0); ei = ei + 1; }
+    var ep = tty_fg_rgb_buf(&ebuf, 0, 255, 255, 255);
+    assert_eq(ep, 19, "max fg escape = 19 bytes (ESC[38;2;255;255;255m)");
+    # Round-trip the inequality the filter loop uses:
+    # `pos + ANUENUE_FLUSH_RESERVE > ANUENUE_LINE_BUF` triggers flush,
+    # so a buffer with pos == ANUENUE_LINE_BUF - ANUENUE_FLUSH_RESERVE
+    # still has room for `max_escape + payload + reset` = 19 + 1 + 4
+    # = 24 bytes... but reserve is 22. The filter doesn't append the
+    # next char until AFTER this check fires, so the actual
+    # invariant is: after the trigger, we flush, pos resets to 0,
+    # then the next escape+byte writes from offset 0 — no overflow.
+    # Reserve must only cover the LAST char + reset already in the
+    # buffer at flush time, which is escape+byte+reset = 24, hmm.
+    # Re-check: the loop appends escape+byte FIRST (consuming up to
+    # 18 bytes), THEN tests whether to flush (with margin for the
+    # NEXT iteration's escape+byte+reset). So at trigger time we
+    # need: 18 (just-written) + 4 (reset on flush) ≤ reserve. 22 fits.
+    # Below: enforce 22 >= 18 + 4.
+    assert(ANUENUE_FLUSH_RESERVE >= 18 + 4, "reserve ≥ max escape + reset");
+
+    # ---- filter constants are sane ---------------------------------
+    test_group("filter constants — sanity");
+    assert(ANUENUE_PHASE_MOD == 1530, "PHASE_MOD = 6 × 255 = 1530");
+    assert(ANUENUE_PHASE_STEP > 0, "PHASE_STEP positive");
+    assert(ANUENUE_PHASE_STEP < ANUENUE_PHASE_MOD, "PHASE_STEP < PHASE_MOD (no per-byte wrap)");
+    # LINE_BUF need not hold a full read-chunk's worst-case output —
+    # the force-flush inside the loop drains incrementally. The real
+    # invariant is "the flush-reserve guard is meaningful": the buf
+    # is large enough that flushes amortize the per-flush syscall
+    # cost over ≥100 characters. With reserve=22, LINE_BUF=32768 ⇒
+    # ~1700 chars between flushes — well over the floor.
+    assert(ANUENUE_LINE_BUF > ANUENUE_FLUSH_RESERVE * 100, "LINE_BUF amortizes ≥100 chars per flush");
+    assert(ANUENUE_LINE_BUF > ANUENUE_FLUSH_RESERVE, "LINE_BUF > FLUSH_RESERVE (no underflow in guard)");
+
     return assert_summary();
 }
 

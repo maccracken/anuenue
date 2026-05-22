@@ -1,21 +1,75 @@
-# anuenue benchmarks
-# Stdlib auto-included via cyrius.cyml
+# anuenue benchmarks — M1 baseline. The per-character overhead is the
+# hot-path metric: anuenue sits in MOTD pipelines (iam | anuenue,
+# bnrmr | anuenue), so the wall-clock cost of one character through
+# the filter is what end-users feel. CSV-style results land in
+# docs/benchmarks.md; this file produces the numbers.
 #
-# Pattern: bench_new -> bench_batch_start -> tight loop -> bench_batch_stop -> bench_report.
-# For sub-1us ops use batch_size >= 1000 to amortize clock_gettime overhead
-# (~240 ns per start/stop pair on x86_64 Linux). See lib/bench.cyr header for
-# the full overhead-vs-batching guidance.
+# Two micro-benchmarks at M1:
+#   1. hsv_rainbow — pure-fn HSV→RGB cost per call. Dominates the
+#      filter's color-computation work; if this regresses every byte
+#      gets slower.
+#   2. tty_fg_rgb_buf — darshana's buf-targeting escape emitter,
+#      pure-fn over a stack buffer. Dominates the filter's escape-
+#      formatting work.
+#
+# The end-to-end `cat largefile | anuenue` benchmark requires a real
+# pipe and a host filesystem read — not a Cyrius bench-loop fit.
+# That's captured separately in docs/benchmarks.md via shell-level
+# time measurements. M5 (perf pass) will add a per-byte aggregate
+# inside this file once we have a fixed input corpus to bench
+# against.
+#
+# Stdlib + darshana + the filter source auto-included via cyrius.cyml.
 
-fn bench_noop(): i64 { return 0; }
+include "src/filter.cyr"
+
+# 1M iterations for hsv_rainbow — sub-100ns per call expected, so a
+# 1M-iter batch keeps total wall-time in the ~100ms range (well past
+# clock_gettime overhead per lib/bench.cyr's batching guidance).
+var BENCH_ITERS_HSV = 1000000;
+
+# 1M iterations for tty_fg_rgb_buf — same per-call envelope.
+var BENCH_ITERS_FG  = 1000000;
 
 fn main(): i64 {
     alloc_init();
-    var b = bench_new("noop");
-    bench_batch_start(b);
+
+    # --- hsv_rainbow per-call cost --------------------------------
+    # Walk phase across the full 1530-unit cycle so every sector
+    # branch is hit. Stride of 1 is overkill but keeps the loop
+    # body simple; the branch predictor handles the predictable
+    # sector transitions.
+    var rgb[24];
+    var b_hsv = bench_new("hsv_rainbow");
+    bench_batch_start(b_hsv);
     var i = 0;
-    while (i < 1000000) { bench_noop(); i = i + 1; }
-    bench_batch_stop(b, 1000000);
-    bench_report(b);
+    var phase = 0;
+    while (i < BENCH_ITERS_HSV) {
+        hsv_rainbow(phase, &rgb);
+        phase = phase + 1;
+        if (phase >= 1530) { phase = 0; }
+        i = i + 1;
+    }
+    bench_batch_stop(b_hsv, BENCH_ITERS_HSV);
+    bench_report(b_hsv);
+
+    # --- tty_fg_rgb_buf per-call cost -----------------------------
+    # The escape emitter dominates the formatting branch of the
+    # filter loop's hot path. RGB triple (255, 128, 17) exercises
+    # 3-digit / 3-digit / 2-digit channel encoding — the
+    # _ansi_emit_u8 branch most consumers will hit on a typical
+    # rainbow walk.
+    var ebuf[32];
+    var b_fg = bench_new("tty_fg_rgb_buf");
+    bench_batch_start(b_fg);
+    var j = 0;
+    while (j < BENCH_ITERS_FG) {
+        tty_fg_rgb_buf(&ebuf, 0, 255, 128, 17);
+        j = j + 1;
+    }
+    bench_batch_stop(b_fg, BENCH_ITERS_FG);
+    bench_report(b_fg);
+
     return 0;
 }
 

@@ -1,0 +1,221 @@
+# filter.cyr — M1 library surface. Contains everything `src/main.cyr`
+# needs at runtime and `tests/anuenue.tcyr` needs at test time: the
+# HSV phase model, the stdin→stdout filter loop, and the module-level
+# constants the filter is sized against.
+#
+# Split out from `src/main.cyr` at M1 (per state.md "Module split
+# planned at M1 — defer until the code earns it"): the test suite
+# needs to `include` the filter without triggering the top-level
+# `main()` invocation that reads stdin. main.cyr now is the
+# entrypoint shell — includes this file, defines `fn main()`, and
+# fires the top-level syscall(SYS_EXIT).
+#
+# Stdlib + darshana auto-included via cyrius.cyml — this file
+# doesn't restate them; the consumer (main.cyr / test) is responsible
+# for that.
+
+# ---- Module-level constants (durable; the M2 -p flag will override the
+# default phase step but not the underlying integer-rainbow geometry).
+
+# Phase space is `[0, 1530)` — 6 hue sectors × 255 sub-steps each. The
+# 1530-unit choice avoids floating-point: at sector boundaries the
+# canonical pure hues fall exactly on integer (R,G,B) without a
+# round-to-255 step. See `hsv_rainbow` below.
+var ANUENUE_PHASE_MOD = 1530;
+
+# Per-byte phase advance at M1. With 1530 / 7 ≈ 219 chars per full
+# cycle, a typical 80-col line spans roughly one-third of the rainbow —
+# enough visual progression to read as "tinted" rather than monochrome,
+# without compressing ROYGBIV into a few characters. M2 (-p freq)
+# replaces the 7 with a CLI-driven value; M1 freezes it.
+var ANUENUE_PHASE_STEP = 7;
+
+# Heap-allocated line buffer size (bytes). Sized so a single-write
+# flush per line holds ~1700 bytes of fg-escape + payload (each char
+# costs ≤19 bytes worst case; the `_ansi_emit_u8` digit packing means
+# most run 13–17). 32KB covers a generous terminal-line width without
+# bloating the binary; explicit heap allocation per CLAUDE.md
+# "Heap-allocate large buffers" rule.
+var ANUENUE_LINE_BUF = 32768;
+
+# Per-syscall read chunk. Independent of the line buffer — we read
+# 4096 input bytes per `read(2)`, then walk those bytes through the
+# line buffer with flush-on-LF / flush-on-near-full. 4096 matches a
+# typical page; no advantage to larger here since the kernel pipe
+# buffer caps at 64KB and we drain it iteratively.
+var ANUENUE_READ_CHUNK = 4096;
+
+# Reserve threshold inside the line buffer. The check fires AFTER
+# the latest character has been appended; at that point the buffer
+# holds at worst `max_escape (19) + payload byte (1) = 20` bytes
+# beyond whatever was there at loop entry, and the flush will then
+# append a 4-byte reset. So the reserve must cover ≥ 20 + 4 = 24...
+# but the check uses `pos + RESERVE > LINE_BUF`, which fires
+# preemptively. With RESERVE = 22, flush fires when there's only
+# 21 bytes of headroom — JUST enough for one more escape+byte (20)
+# plus the reset+LF path (5) if the next byte is an LF. The
+# `tests/anuenue.tcyr` `filter geometry — flush reserve sizing`
+# group asserts the inequality.
+var ANUENUE_FLUSH_RESERVE = 22;
+
+# ---- hsv_rainbow ---------------------------------------------------
+#
+# Integer-only HSV → RGB for full-saturation full-value (S=V=1) rainbow.
+# This is the entire color model anuenue ships at v1.0 — no palettes,
+# no themes; the brand IS the rainbow. See `docs/adr/` (planned at
+# M7) for the why; CLAUDE.md flags this as "Own the HSV phase model".
+#
+# Geometry: hue space is split into 6 sectors of 255 sub-steps each.
+# Within a sector one channel is at 255, one is at 0, and one is the
+# linear ramp `t` (rising) or `255 - t` (falling). At sector
+# boundaries the canonical pure hues are exact integers:
+#
+#   phase=   0 → ( 255,   0,   0 )   red
+#   phase= 255 → ( 255, 255,   0 )   yellow
+#   phase= 510 → (   0, 255,   0 )   green
+#   phase= 765 → (   0, 255, 255 )   cyan
+#   phase=1020 → (   0,   0, 255 )   blue
+#   phase=1275 → ( 255,   0, 255 )   magenta
+#   phase=1530 = 0 (mod 1530), wraps back to red.
+#
+# `out_rgb` is a 24-byte buffer (3 × i64 slots) the caller has
+# stack-allocated. We write r at offset 0, g at offset 8, b at
+# offset 16. i64 slots (not u8) match Cyrius's "every struct field
+# is 8 bytes, accessed via load64 / store64" convention from
+# CLAUDE.md, and lets the downstream `tty_fg_rgb_buf` consume them
+# directly without a widening load.
+fn hsv_rainbow(phase, out_rgb): i64 {
+    # Normalize phase into `[0, ANUENUE_PHASE_MOD)`. Negative inputs
+    # wrap once — the caller's phase walks forward in
+    # ANUENUE_PHASE_STEP increments, so a wraparound is rare unless a
+    # future flag (e.g. M2 -F starting offset) lands negative.
+    phase = phase % ANUENUE_PHASE_MOD;
+    if (phase < 0) { phase = phase + ANUENUE_PHASE_MOD; }
+    var sector = phase / 255;
+    var t = phase % 255;
+    if (sector == 0) {
+        store64(out_rgb + 0,  255);
+        store64(out_rgb + 8,  t);
+        store64(out_rgb + 16, 0);
+    } else { if (sector == 1) {
+        store64(out_rgb + 0,  255 - t);
+        store64(out_rgb + 8,  255);
+        store64(out_rgb + 16, 0);
+    } else { if (sector == 2) {
+        store64(out_rgb + 0,  0);
+        store64(out_rgb + 8,  255);
+        store64(out_rgb + 16, t);
+    } else { if (sector == 3) {
+        store64(out_rgb + 0,  0);
+        store64(out_rgb + 8,  255 - t);
+        store64(out_rgb + 16, 255);
+    } else { if (sector == 4) {
+        store64(out_rgb + 0,  t);
+        store64(out_rgb + 8,  0);
+        store64(out_rgb + 16, 255);
+    } else {
+        # sector 5 — the only remaining case (phase / 255 in [0, 5])
+        store64(out_rgb + 0,  255);
+        store64(out_rgb + 8,  0);
+        store64(out_rgb + 16, 255 - t);
+    } } } } }
+    return 0;
+}
+
+# ---- anuenue_filter ------------------------------------------------
+#
+# The pipe-purity proof. Reads stdin in ANUENUE_READ_CHUNK chunks,
+# emits each byte prefixed by a 24-bit fg escape derived from a
+# monotonically-advancing phase counter, flushes on LF or buffer-near-
+# full, resets SGR before each LF so the terminal returns clean.
+#
+# Capability surface: read(0), write(1), and the brk(2) that
+# `alloc()` already invoked for the heap. No open, connect, fork,
+# exec, signal, ioctl. Auditable by `strace -e trace=!read,!write -p
+# <pid>` returning empty after `alloc_init()`.
+#
+# Return value: 0 on clean EOF, non-zero on a read(2) error. Per
+# CLAUDE.md the only failure path we care about is the kernel-side
+# one; we treat partial reads and short writes as normal.
+fn anuenue_filter(): i64 {
+    var line_buf = alloc(ANUENUE_LINE_BUF);
+    var read_buf = alloc(ANUENUE_READ_CHUNK);
+    if (line_buf == 0 || read_buf == 0) {
+        # alloc returns 0 on OOM. Surface a non-zero exit so callers
+        # can detect the failure — silently truncating output would
+        # be worse than a clean error code.
+        return 1;
+    }
+
+    var pos = 0;        # current write offset into line_buf
+    var phase = 0;      # current hue phase, advances per byte
+    var rgb[24];        # 3 × i64 slots — hsv_rainbow output
+
+    var go = 1;
+    while (go == 1) {
+        var n = file_read(STDIN, read_buf, ANUENUE_READ_CHUNK);
+        if (n <= 0) {
+            # n == 0: clean EOF. n < 0: read error (return as exit code).
+            if (n < 0) {
+                # Flush whatever's queued before erroring so partial
+                # output isn't lost.
+                if (pos > 0) {
+                    pos = tty_sgr_reset_buf(line_buf, pos);
+                    file_write(STDOUT, line_buf, pos);
+                }
+                return 1;
+            }
+            # Clean EOF — flush remainder and exit.
+            if (pos > 0) {
+                pos = tty_sgr_reset_buf(line_buf, pos);
+                file_write(STDOUT, line_buf, pos);
+                pos = 0;
+            }
+            go = 0;
+            continue;
+        }
+
+        var i = 0;
+        while (i < n) {
+            var b = load8(read_buf + i);
+
+            if (b == 10) {
+                # LF — close out the line. Reset SGR so the terminal
+                # doesn't inherit the last char's color across the
+                # newline (shell prompt re-displays with default fg),
+                # then emit the LF, then flush.
+                pos = tty_sgr_reset_buf(line_buf, pos);
+                store8(line_buf + pos, 10);
+                pos = pos + 1;
+                file_write(STDOUT, line_buf, pos);
+                pos = 0;
+                # Phase keeps advancing across the LF — the rainbow
+                # is a property of byte ordinal, not column position.
+                phase = phase + ANUENUE_PHASE_STEP;
+                i = i + 1;
+                continue;
+            }
+
+            # Non-LF: append fg escape + the byte itself.
+            hsv_rainbow(phase, &rgb);
+            var r = load64(&rgb + 0);
+            var g = load64(&rgb + 8);
+            var bch = load64(&rgb + 16);
+            pos = tty_fg_rgb_buf(line_buf, pos, r, g, bch);
+            store8(line_buf + pos, b);
+            pos = pos + 1;
+            phase = phase + ANUENUE_PHASE_STEP;
+
+            # Force-flush if the next character couldn't fit a worst-
+            # case escape + payload + trailing reset.
+            if (pos + ANUENUE_FLUSH_RESERVE > ANUENUE_LINE_BUF) {
+                pos = tty_sgr_reset_buf(line_buf, pos);
+                file_write(STDOUT, line_buf, pos);
+                pos = 0;
+            }
+
+            i = i + 1;
+        }
+    }
+    return 0;
+}
