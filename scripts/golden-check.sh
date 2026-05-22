@@ -72,18 +72,25 @@ check_golden "tests/golden/cjk-mixed-s0.out" \
 # + combining acute U+0301 (two codepoints, one grapheme). Both
 # bytes render under a single fg escape; phase advances only when
 # the next non-extending codepoint arrives.
+#
+# NOTE: escapes use POSIX-octal `\NNN`, not `\xHH`. CI runs under
+# dash (Ubuntu /bin/sh), which only supports the octal form;
+# `\xCC\x81` would be emitted as literal ASCII chars and the
+# fixture would drift to a longer per-byte rainbow. \314\201 is
+# UTF-8 for U+0301 COMBINING ACUTE ACCENT.
 check_golden "tests/golden/combining-s0.out" \
     "M3 combining diacritic é + rainbow" \
-    "printf 'e\xCC\x81rainbow' | $BIN -s 0"
+    "printf 'e\314\201rainbow' | $BIN -s 0"
 
 # Fixture 4 — v0.4.0 M3 ZWJ + regional indicator. Family emoji
 # (👨 ZWJ 👩 ZWJ 👧) renders as ONE grapheme cluster (5 codepoints
 # → one phase advance). 🇺🇸 (two regional indicators) also one
 # cluster. Stresses both the ZWJ-extending latch and the RI-pair
-# latch in one input.
+# latch in one input. \342\200\215 = UTF-8 for U+200D ZWJ
+# (octal form per the dash-portability note on Fixture 3).
 check_golden "tests/golden/zwj-flag-s0.out" \
     "M3 ZWJ family + RI flag" \
-    "printf '👨\xE2\x80\x8D👩\xE2\x80\x8D👧🇺🇸' | $BIN -s 0"
+    "printf '👨\342\200\215👩\342\200\215👧🇺🇸' | $BIN -s 0"
 
 # Determinism cross-check: same invocation twice must produce
 # byte-identical output. Catches accidental non-determinism (RNG,
