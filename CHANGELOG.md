@@ -4,6 +4,66 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-21 — M2: Flag Surface
+
+lolcat-equivalent CLI lands. Five flags (`-h`/`-V`/`-p`/`-s`/`-F`)
+sit between argv and the M1 filter loop; the loop itself is
+byte-identical to v0.2.0. Determinism is now a CI-asserted property
+(committed 238-byte golden fixture), and the `anuenue X.Y.Z` literal
+is auto-generated from `VERSION` so the cyim-1.2.2-style drift can't
+happen here.
+
+### Added
+
+- **M2 — Flag Surface.** lolcat-equivalent CLI with five flags:
+  `-h` / `--help`, `-V` / `--version`, `-p` / `--freq <N>` (phase
+  step per character; default 7), `-s` / `--seed <N>` (starting
+  hue phase — the deterministic-output hook), `-F` / `--offset <N>`
+  (additive phase offset; Ruby-lolcat compat). `-s` and `-F` are
+  additive (PHASE_START = seed + offset) so they compose without
+  precedence surprises. Parse errors surface a specific message
+  (unknown flag / missing value / bad int / bundled-short rejection)
+  followed by usage, exit 2.
+- **Stdlib expansion** — `args` and `flags` added to
+  `cyrius.cyml [deps].stdlib`. The flag parser is the AGNOS-
+  canonical `lib/flags.cyr` (used by every toolchain binary and
+  consumer); the inline-vs-stdlib roadmap note was tightened —
+  stdlib doesn't count as "adding a flag-parsing lib." Capability
+  surface gained `open(2)` + `close(3)` at startup for
+  `/proc/self/cmdline` via `args_init()`; the filter loop itself
+  remains read(0) / write(1) / brk(12) / exit(60) only.
+- **Version-bump pipeline** (`scripts/version-bump.sh` + auto-
+  generated `src/version_str.cyr`) — cyim's drift-prevention
+  pattern, adapted. The `anuenue X.Y.Z` literal is regenerated on
+  every bump; CI's new **Version consistency** step asserts the
+  literal matches `VERSION` (and CHANGELOG has a section for the
+  current version, and `cyrius.cyml` still pulls via
+  `${file:VERSION}`). Drives `print_version()` in
+  `src/main.cyr` — never hand-edit `src/version_str.cyr`.
+- **Determinism golden** — `tests/golden/agnos-rainbow-s100.out`
+  + `scripts/golden-check.sh`. Asserts `printf "AGNOS rainbow" |
+  ./build/anuenue -s 100` produces a byte-identical 238-byte
+  output every time. Wired into CI as the **Golden output**
+  step. Catches regressions the unit suite can't see (HSV
+  geometry, escape framing, line-flush ordering).
+- **27 new assertions across 7 new groups** in
+  `tests/anuenue.tcyr`: long-form bool dispatch (`--help`); short-
+  form bool dispatch (`-V`); int extraction over short forms
+  (`-p 13 -s 42 -F 100`); attached long-form value (`--freq=99`);
+  additive seed+offset semantics (510+510 lands at phase 1020 →
+  blue); error-variant dispatch (UNKNOWN, MISSING_VALUE, BAD_INT);
+  `_VERSION_STR_ANUENUE` literal-shape sanity (prefix + LF
+  terminator + length match).
+
+### Changed
+
+- `src/filter.cyr` — `ANUENUE_PHASE_STEP` and the new
+  `ANUENUE_PHASE_START` are mutable module-level vars; `main.cyr`
+  overwrites them from flags before `anuenue_filter()` runs.
+  Default behavior unchanged from v0.2.0.
+- `.github/workflows/ci.yml` — three new steps: **Golden output**,
+  **Version consistency**.
+
 ## [0.2.0] — 2026-05-21 — M1: Minimum Viable Filter
 
 The pipe-purity proof. stdin → stdout, per-byte 24-bit-truecolor

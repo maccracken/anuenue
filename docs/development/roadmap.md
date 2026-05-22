@@ -71,19 +71,24 @@ Shipped surface:
 
 **Acceptance** (all green): `echo "AGNOS" | ./build/anuenue` renders rainbow ASCII; `printf 'X%.0s' {1..100000} | ./build/anuenue > /dev/null` exits 0 with no OOM; baseline bench captured.
 
-### M2 — Flag Surface (v0.3.0)
+### M2 — Flag Surface (v0.3.0) — ✅ shipped 2026-05-21
 
 Mirror lolcat's flag surface, AGNOS-flavored:
 
-- `-s <seed>` — color seed (deterministic output for tests)
-- `-p <freq>` — palette frequency (controls phase advance per character)
-- `-h` / `--help` — usage
-- `-V` / `--version` — version (from cyrius.cyml `${file:VERSION}`)
-- `-F <offset>` — phase offset start (Ruby lolcat compat)
+- `-s <seed>` — color seed (deterministic output for tests). Writes starting hue phase.
+- `-p <freq>` — palette frequency (controls phase advance per character). Default 7.
+- `-h` / `--help` — usage. Printed to stderr per POSIX; pipe-purity unaffected.
+- `-V` / `--version` — version. Reads `_VERSION_STR_ANUENUE` from auto-generated `src/version_str.cyr` (cyim drift-prevention pattern); CI's Version consistency step asserts the literal vs `VERSION` file.
+- `-F <offset>` — phase offset start (Ruby lolcat compat). Additive to `-s`: `PHASE_START = seed + offset`.
 
-Flag parser: lightweight inline; defer adding a flag-parsing lib unless a second consumer wants the same surface.
+**Parser**: settled on `lib/flags.cyr` (AGNOS stdlib) over the
+roadmap-original "lightweight inline" — the stdlib parser is what
+every toolchain binary and consumer uses; adopting stdlib doesn't
+trip the "don't add a flag-parsing lib" rule (which was about
+sibling deps, not stdlib). Capability-surface delta: `args_init()`
+opens `/proc/self/cmdline` once at startup (open(2) + read + close(3)).
 
-**Acceptance**: every flag exercised in `tests/anuenue.tcyr`; deterministic-seed test passes; `--help` output stable.
+**Acceptance** (all green): every flag exercised in `tests/anuenue.tcyr` (27 new assertions across 7 groups); deterministic-seed test passes via `tests/golden/agnos-rainbow-s100.out` + `scripts/golden-check.sh` (CI-wired); `--help` output stable and stderr-only.
 
 ### M3 — UTF-8 Grapheme Awareness (v0.4.0)
 

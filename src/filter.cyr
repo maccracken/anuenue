@@ -23,12 +23,22 @@
 # round-to-255 step. See `hsv_rainbow` below.
 var ANUENUE_PHASE_MOD = 1530;
 
-# Per-byte phase advance at M1. With 1530 / 7 ≈ 219 chars per full
-# cycle, a typical 80-col line spans roughly one-third of the rainbow —
-# enough visual progression to read as "tinted" rather than monochrome,
-# without compressing ROYGBIV into a few characters. M2 (-p freq)
-# replaces the 7 with a CLI-driven value; M1 freezes it.
+# Per-byte phase advance. With 1530 / 7 ≈ 219 chars per full cycle,
+# a typical 80-col line spans roughly one-third of the rainbow —
+# enough visual progression to read as "tinted" rather than
+# monochrome, without compressing ROYGBIV into a few characters.
+# v0.3.0 (M2) made this a CLI override: `anuenue -p <freq>` writes
+# this var before anuenue_filter() runs. 7 is the default for
+# back-compat with the v0.2.0 visual cadence.
 var ANUENUE_PHASE_STEP = 7;
+
+# Starting phase (mod ANUENUE_PHASE_MOD). v0.3.0 added — the `-s
+# <seed>` and `-F <offset>` flags both write here (last one wins;
+# semantically equivalent, `-s` being the AGNOS-native test-hook
+# name and `-F` the Ruby-lolcat compat name). Default 0 produces
+# the canonical "start at pure red" output. anuenue_filter() reads
+# this as the initial phase value once at loop entry.
+var ANUENUE_PHASE_START = 0;
 
 # Heap-allocated line buffer size (bytes). Sized so a single-write
 # flush per line holds ~1700 bytes of fg-escape + payload (each char
@@ -147,9 +157,9 @@ fn anuenue_filter(): i64 {
         return 1;
     }
 
-    var pos = 0;        # current write offset into line_buf
-    var phase = 0;      # current hue phase, advances per byte
-    var rgb[24];        # 3 × i64 slots — hsv_rainbow output
+    var pos = 0;                            # current write offset into line_buf
+    var phase = ANUENUE_PHASE_START;        # hue phase, advances per byte; M2 starting offset
+    var rgb[24];                            # 3 × i64 slots — hsv_rainbow output
 
     var go = 1;
     while (go == 1) {

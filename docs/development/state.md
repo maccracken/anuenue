@@ -5,21 +5,28 @@
 
 ## Version
 
-**0.2.0** — cut 2026-05-21 (open + close compressed, same day as the
-0.1.0 scaffold). **M1 closed.** Pipe-purity proof shipped: stdin →
-stdout per-byte 24-bit rainbow via darshana 0.5.1's new
-`tty_fg_rgb_buf` + `tty_sgr_reset_buf` helpers. Drove the darshana
-truecolor unlock as the sandhi consumer; both repos cut same-day.
+**0.3.0** — cut 2026-05-21 (open + close compressed, third same-day
+release with 0.1.0 / 0.2.0). **M2 closed.** Five-flag CLI
+(`-h`/`-V`/`-p`/`-s`/`-F`) sits between argv and the M1 filter loop;
+loop itself byte-identical to 0.2.0. Determinism is now a
+CI-asserted property; version literal is auto-generated; capability
+surface picked up open/close at startup for /proc/self/cmdline.
+
+**0.2.0** — cut 2026-05-21. **M1 closed.** Pipe-purity proof
+shipped: stdin → stdout per-byte 24-bit rainbow via darshana 0.5.1's
+new `tty_fg_rgb_buf` + `tty_sgr_reset_buf` helpers. Drove the
+darshana truecolor unlock as the sandhi consumer; both repos cut
+same-day.
 
 **0.1.0** — scaffolded 2026-05-21 via `cyrius init anuenue`. Empty
-filter — pure scaffold release; the M1 implementation work lives
-in the 0.2.0 section above.
+filter — pure scaffold release.
 
 ## Phase
 
-**M1 closed at v0.2.0.** Next slot is **M2 — Flag Surface (v0.3.0)**
-per [roadmap.md](roadmap.md): `-s <seed>`, `-p <freq>`, `-h`, `-V`,
-`-F <offset>`.
+**M2 closed at v0.3.0.** Next slot is **M3 — UTF-8 Grapheme
+Awareness (v0.4.0)** per [roadmap.md](roadmap.md): cycle by
+grapheme cluster, not byte. Multi-byte UTF-8 characters (and
+combining sequences, ZWJ emoji) get one phase advance, not N.
 
 ## Toolchain
 
@@ -28,39 +35,40 @@ per [roadmap.md](roadmap.md): `-s <seed>`, `-p <freq>`, `-h`, `-V`,
 
 ## Source
 
-M1 shipped the predicted module split (the test suite needed the
-filter without its top-level `main()` call):
-
 | File | Lines | Surface |
 |------|-------|---------|
-| `src/filter.cyr` | ~180 | `ANUENUE_*` constants (phase mod, phase step, line-buf / read-chunk / flush-reserve sizing); `hsv_rainbow(phase, out_rgb)` — integer 6-sector HSV; `anuenue_filter()` — stdin→stdout loop with LF-flush + force-flush. Library surface; testable in isolation. |
-| `src/main.cyr` | ~20 | Entrypoint shell: `include "src/filter.cyr"` + `fn main()` (alloc_init + `anuenue_filter()`) + top-level `var r = main(); syscall(SYS_EXIT, r);`. |
+| `src/filter.cyr` | ~190 | `ANUENUE_*` constants (phase mod, phase step, phase start, line-buf / read-chunk / flush-reserve sizing); `hsv_rainbow(phase, out_rgb)` — integer 6-sector HSV; `anuenue_filter()` — stdin→stdout loop with LF-flush + force-flush. Library surface; testable in isolation. M2 made `ANUENUE_PHASE_STEP` and `ANUENUE_PHASE_START` flag-overridable (mutable, written from main before filter runs). |
+| `src/main.cyr` | ~110 | Entrypoint + flag dispatch. args_init / alloc_init / flags context (-h/-V/-p/-s/-F) / argv pack / flags_parse / dispatch to print_version / print_usage / anuenue_filter. M2 grew this from ~20 lines (scaffold-shell) to ~110 with the flag surface. |
+| `src/version_str.cyr` | ~18 | **AUTO-GENERATED** by `scripts/version-bump.sh`. Holds `_VERSION_STR_ANUENUE` + `_VERSION_LEN_ANUENUE`. Never hand-edit; CI's Version consistency step asserts the literal matches `VERSION`. |
 | `src/test.cyr` | 12 | top-level test entry stub (referenced by `cyrius.cyml [build].test`). Actual tests live in `tests/anuenue.tcyr`. |
 
-The third file the M0 plan anticipated (`src/hsv.cyr`) didn't earn
-a split — `hsv_rainbow` is ~30 lines and lives in `filter.cyr`. Revisit
-at M3 (UTF-8 grapheme awareness) if the grapheme-boundary logic
-crowds the filter loop.
+The third file the M0 plan anticipated (`src/hsv.cyr`) still
+hasn't earned a split — `hsv_rainbow` is ~30 lines and lives in
+`filter.cyr`. Revisit at M3 (UTF-8 grapheme awareness) if the
+grapheme-boundary logic crowds the filter loop.
 
 ## Binary
 
-- **Size (0.2.0, DCE on)**: **304 368 bytes** (~297 KB) from a clean
+- **Size (0.3.0, DCE on)**: **317 216 bytes** (~310 KB) from a clean
   `rm -rf build && cyrius deps && CYRIUS_DCE=1 cyrius build`.
-  Reference floor for future minor-cycle comparison; M5 (perf pass)
-  will set a production budget against this number.
-- **DCE elimination**: 1 236 unreachable fns, 217 823 bytes NOPed.
+  Delta vs 0.2.0: **+12 848 bytes** for the args + flags stdlib
+  modules + version_str. M5 (perf pass) will set a production
+  budget against this floor.
+- **DCE elimination**: 1 239 unreachable fns, 217 727 bytes NOPed.
+- **Prior floors**: 0.2.0 = 304 368 bytes (1 236 fns NOPed).
 - **Output path**: `build/anuenue`
 
 ## Tests
 
 | File | Status |
 |------|--------|
-| `tests/anuenue.tcyr` | **47 assertions across 6 groups** (smoke; HSV canonical hues; HSV sector ramps; HSV phase normalization; filter-geometry flush-reserve sizing; filter-constant sanity). The end-to-end stdin/stdout filter is exercised manually + via the M1-baseline `docs/benchmarks.md` run; Cyrius can't trivially redirect fd 0/1 inside a unit test, so the I/O surface is owned by integration smoke. |
+| `tests/anuenue.tcyr` | **74 assertions across 13 groups** (smoke; HSV canonical hues; HSV sector ramps; HSV phase normalization; filter-geometry flush-reserve sizing; filter-constant sanity; **M2 flags**: long/short bool, short -V, int -p/-s/-F, --freq=N attached, additive seed+offset, error variants UNKNOWN/MISSING_VALUE/BAD_INT, version literal shape). Cyrius can't trivially redirect fd 0/1 in unit scope, so the end-to-end byte-stream is owned by the golden harness. |
 | `tests/anuenue.bcyr` | **2 micro-benchmarks** (1M iter each): `hsv_rainbow` ≈8 ns/call, `tty_fg_rgb_buf` ≈45 ns/call. Captured against the M1 baseline in `docs/benchmarks.md`. |
-| `tests/anuenue.fcyr` | fuzz stub — first harness lands at M2+ when the flag parser exists. |
+| `tests/anuenue.fcyr` | fuzz stub — first harness still pending; the M2 flag parser is now the natural target. |
+| `tests/golden/agnos-rainbow-s100.out` | **238-byte fixture** for `printf "AGNOS rainbow" \| anuenue -s 100`. Drift = regression in filter / HSV / darshana. Asserted by `scripts/golden-check.sh` and CI's **Golden output** step. |
 
-Assertion target now: 20+ achieved (47). M2 will roughly double it
-(flag-parser coverage + `-s seed` determinism asserts).
+Assertion target M2: doubled (74 vs M1's 47). M3 will add UTF-8
+corpus coverage on top.
 
 ## Dependencies
 
@@ -94,17 +102,18 @@ Anticipated at v0.7+:
 ## Carry-Forward
 
 - **`docs/adr/0001-pipe-purity.md`** — planned for M7. The M1
-  implementation already enforces the pipe-purity rule (alloc-then-
-  read-write-only); the ADR records the *why* before M2 starts
-  adding flags that could tempt scope creep (file-input mode, etc.).
-- **Integration smoke harness** — Cyrius can't redirect fd 0/1 inside
-  a unit test, so the M1 end-to-end coverage is shell-driven (manual
-  `printf | anuenue` runs documented in `docs/benchmarks.md`). M2 or
-  M5 should land a `scripts/smoke.sh` equivalent to darshana's, with
-  golden-output fixtures keyed off the deterministic `-s seed` flag.
-- **DCE binary-size budget** — currently unmeasured (M1 build is
-  non-DCE). Capture at the next clean build with `CYRIUS_DCE=1`.
+  implementation already enforces the pipe-purity rule and the M2
+  flag surface holds the line (no file-input flag, no config
+  file, no themes); the ADR records the *why* before later
+  milestones could tempt scope creep.
+- **`tests/anuenue.fcyr`** — fuzz harness stub still empty. The
+  M2 flag parser is now the natural target (random argv tokens →
+  flags_parse never crashes / always exits with a valid status).
+  Defer until M3 or whenever a parse-path bug is discovered in the
+  wild.
+- **DCE binary size after M2** — captured at 0.3.0 cut: 317 216
+  bytes (+12.8 KB vs 0.2.0). Recapture at every minor cut.
 
 ## Next
 
-See [roadmap.md § M2](roadmap.md#m2--flag-surface-v030).
+See [roadmap.md § M3](roadmap.md#m3--utf-8-grapheme-awareness-v040).

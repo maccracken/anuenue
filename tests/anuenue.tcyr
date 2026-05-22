@@ -10,6 +10,7 @@
 # Stdlib + darshana auto-included via cyrius.cyml.
 
 include "src/filter.cyr"
+include "src/version_str.cyr"
 
 fn main(): i64 {
     alloc_init();
@@ -145,6 +146,131 @@ fn main(): i64 {
     # ~1700 chars between flushes — well over the floor.
     assert(ANUENUE_LINE_BUF > ANUENUE_FLUSH_RESERVE * 100, "LINE_BUF amortizes ≥100 chars per flush");
     assert(ANUENUE_LINE_BUF > ANUENUE_FLUSH_RESERVE, "LINE_BUF > FLUSH_RESERVE (no underflow in guard)");
+
+    # ---- v0.3.0 — M2 flag-parser coverage ---------------------------
+    # Exercises `flags_parse` over synthetic argv arrays. The
+    # parser's own contract is asserted in cyrius's own
+    # tests/flags.tcyr; here we verify anuenue's flag-set wiring:
+    # short forms, long forms, integer extraction, the additive
+    # `-s` + `-F` accumulator, the boolean -h / -V markers, and the
+    # error-variant dispatch. The end-to-end stdin/stdout path
+    # (`echo X | anuenue -s 42`) is exercised by the determinism
+    # golden in `docs/benchmarks.md` (M5 may scriptize it).
+    test_group("M2 flags — long/short bool flags");
+    var fs1 = flags_new();
+    var f_help    = flags_add_bool(fs1, 104, "help",    0, "h");
+    var f_version = flags_add_bool(fs1, 86,  "version", 0, "v");
+    var f_freq    = flags_add_int (fs1, 112, "freq",    7, "p");
+    var f_seed    = flags_add_int (fs1, 115, "seed",    0, "s");
+    var f_offset  = flags_add_int (fs1, 70,  "offset",  0, "F");
+    # Argv: ["anuenue", "--help"]
+    var argv1[8];
+    store64(&argv1 + 0,  "anuenue");
+    store64(&argv1 + 8,  "--help");
+    assert_eq(flags_parse(fs1, 2, &argv1), 0, "long --help parses clean");
+    assert_eq(flags_get_bool(fs1, f_help), 1, "--help → true");
+    assert_eq(flags_get_bool(fs1, f_version), 0, "--version untouched");
+    assert_eq(flags_get_int(fs1, f_freq), 7, "freq = default 7");
+
+    test_group("M2 flags — short -V");
+    var fs2 = flags_new();
+    var f2_v = flags_add_bool(fs2, 86, "version", 0, "v");
+    var argv2[8];
+    store64(&argv2 + 0, "anuenue");
+    store64(&argv2 + 8, "-V");
+    assert_eq(flags_parse(fs2, 2, &argv2), 0, "-V parses clean");
+    assert_eq(flags_get_bool(fs2, f2_v), 1, "-V → true");
+
+    test_group("M2 flags — int -p / -s / -F");
+    var fs3 = flags_new();
+    var f3_p = flags_add_int(fs3, 112, "freq",   7, "p");
+    var f3_s = flags_add_int(fs3, 115, "seed",   0, "s");
+    var f3_F = flags_add_int(fs3, 70,  "offset", 0, "F");
+    # Argv: ["anuenue", "-p", "13", "-s", "42", "-F", "100"]
+    var argv3[64];
+    store64(&argv3 + 0,  "anuenue");
+    store64(&argv3 + 8,  "-p");
+    store64(&argv3 + 16, "13");
+    store64(&argv3 + 24, "-s");
+    store64(&argv3 + 32, "42");
+    store64(&argv3 + 40, "-F");
+    store64(&argv3 + 48, "100");
+    assert_eq(flags_parse(fs3, 7, &argv3), 0, "-p 13 -s 42 -F 100 parses clean");
+    assert_eq(flags_get_int(fs3, f3_p), 13,  "-p value extracted");
+    assert_eq(flags_get_int(fs3, f3_s), 42,  "-s value extracted");
+    assert_eq(flags_get_int(fs3, f3_F), 100, "-F value extracted");
+
+    test_group("M2 flags — long --freq=N attached syntax");
+    var fs4 = flags_new();
+    var f4_p = flags_add_int(fs4, 112, "freq", 7, "p");
+    var argv4[16];
+    store64(&argv4 + 0, "anuenue");
+    store64(&argv4 + 8, "--freq=99");
+    assert_eq(flags_parse(fs4, 2, &argv4), 0, "--freq=99 parses clean");
+    assert_eq(flags_get_int(fs4, f4_p), 99, "--freq=99 value extracted");
+
+    test_group("M2 flags — additive seed+offset semantics");
+    # Verifies the main.cyr dispatch logic: PHASE_START = seed +
+    # offset. -s 510 (green) + -F 510 (advance 2 sectors) = 1020 (blue).
+    var fs5 = flags_new();
+    var f5_s = flags_add_int(fs5, 115, "seed",   0, "s");
+    var f5_F = flags_add_int(fs5, 70,  "offset", 0, "F");
+    var argv5[32];
+    store64(&argv5 + 0,  "anuenue");
+    store64(&argv5 + 8,  "-s");
+    store64(&argv5 + 16, "510");
+    store64(&argv5 + 24, "-F");
+    store64(&argv5 + 32, "510");
+    assert_eq(flags_parse(fs5, 5, &argv5), 0, "-s 510 -F 510 parses clean");
+    var combined = flags_get_int(fs5, f5_s) + flags_get_int(fs5, f5_F);
+    assert_eq(combined, 1020, "seed + offset = 1020 (blue start)");
+    # Confirm the resulting phase lands in sector 4 → blue at byte 0.
+    var rgb5[24];
+    hsv_rainbow(combined, &rgb5);
+    assert_eq(load64(&rgb5 + 0),  0,   "combined phase 1020 → R=0");
+    assert_eq(load64(&rgb5 + 16), 255, "combined phase 1020 → B=255 (blue)");
+
+    test_group("M2 flags — error variants");
+    # Unknown flag rejected.
+    var fs6 = flags_new();
+    flags_add_bool(fs6, 104, "help", 0, "h");
+    var argv6[16];
+    store64(&argv6 + 0, "anuenue");
+    store64(&argv6 + 8, "--bogus");
+    assert_eq(flags_parse(fs6, 2, &argv6), 0 - 1, "unknown flag rejected");
+    assert_eq(flags_error(fs6), FLAG_ERR_UNKNOWN, "error variant = UNKNOWN");
+
+    # Missing value for int flag rejected.
+    var fs7 = flags_new();
+    flags_add_int(fs7, 112, "freq", 7, "p");
+    var argv7[16];
+    store64(&argv7 + 0, "anuenue");
+    store64(&argv7 + 8, "-p");                 # no value follows
+    assert_eq(flags_parse(fs7, 2, &argv7), 0 - 1, "-p without value rejected");
+    assert_eq(flags_error(fs7), FLAG_ERR_MISSING_VALUE, "error variant = MISSING_VALUE");
+
+    # Bad integer value rejected.
+    var fs8 = flags_new();
+    flags_add_int(fs8, 112, "freq", 7, "p");
+    var argv8[32];
+    store64(&argv8 + 0,  "anuenue");
+    store64(&argv8 + 8,  "-p");
+    store64(&argv8 + 16, "notanumber");
+    assert_eq(flags_parse(fs8, 3, &argv8), 0 - 1, "non-numeric -p value rejected");
+    assert_eq(flags_error(fs8), FLAG_ERR_BAD_INT, "error variant = BAD_INT");
+
+    test_group("M2 — version literal consistency");
+    # _VERSION_STR_ANUENUE is auto-generated by scripts/version-
+    # bump.sh; assert the literal format so a hand-edit (or a stale
+    # version_str.cyr) trips the test before it can ship in a
+    # release. Bytes: "anuenue " (8) + "X.Y.Z" + "\n".
+    assert_eq(load8(_VERSION_STR_ANUENUE + 0), 97,  "byte 0 = 'a'");
+    assert_eq(load8(_VERSION_STR_ANUENUE + 1), 110, "byte 1 = 'n'");
+    assert_eq(load8(_VERSION_STR_ANUENUE + 7), 32,  "byte 7 = ' '");
+    assert_eq(load8(_VERSION_STR_ANUENUE + _VERSION_LEN_ANUENUE - 1), 10, "last byte = LF");
+    # Length matches strlen — guards against version-bump.sh writing
+    # a mismatched LEN constant.
+    assert_eq(strlen(_VERSION_STR_ANUENUE), _VERSION_LEN_ANUENUE, "strlen matches _VERSION_LEN_ANUENUE");
 
     return assert_summary();
 }

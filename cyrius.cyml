@@ -13,7 +13,12 @@ test = "src/test.cyr"
 output = "build/anuenue"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench"]
+# v0.3.0 (M2 — Flag Surface) added "args" + "flags" — the AGNOS-
+# canonical argv + getopt-long-shaped flag parser used by every
+# toolchain binary (cyrius, ark, cyrld, cyrfmt) and consumer
+# (cyim, chakshu, bannermanor). Not a sibling-dep introduction —
+# both live in the cyrius stdlib.
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "flags"]
 
 # AGNOS first-party deps — pinned tags per `feedback_dep_lockin_sandhi_unlock`.
 # darshana provides the ANSI escape primitives anuenue emits per character.
