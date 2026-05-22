@@ -57,8 +57,9 @@ signal per
 
 **Shipped:** M0 (v0.1.0) → M1 (v0.2.0) → M2 (v0.3.0) → M3 (v0.4.0)
 → M4 (v0.5.0) → M5 (v0.6.0) → M6 (v0.7.0) → sandhi closeout
-(v0.7.1) → **M7 (docs) + M8 (audit) (v0.8.0)**. See the
-per-milestone entries below for delivered surface.
+(v0.7.1) → M7 (docs) + M8 (audit) (v0.8.0) → **quality slot
+(v0.9.0)**. See the per-milestone entries below for delivered
+surface.
 
 **Remaining to v1.0:** consumer soak window → v1.0.0 tag on
 user signal.
@@ -81,6 +82,7 @@ this table is just the index.
 | v0.7.0   | M6 — Color-Mode Negotiation     | TRUECOLOR / 256 / 16 / MONO with priority chain; `--no-color` / `--force-color` / `--color <mode>` flags.               |
 | v0.7.1   | Sandhi closeout                 | darshana 0.5.3 swap (`tty_isatty` / `tty_sgr_buf` / `tty_fg_256_buf`); stand-ins removed; DCE cap raised 350 → 512 KB.   |
 | v0.8.0   | M7 + M8 — Docs + Audit          | Three ADRs (pipe-purity / HSV-inline / grapheme-cluster), integration guide, 8 examples, refreshed `print_usage`. M8 audit found + fixed one HIGH (`_render_frame` long-cluster heap overflow); zero HIGH+ open. |
+| v0.9.0   | Quality slot                    | `fuzz/` populated with 5 harnesses (1.35M assertions, CI-gated). `animate-smoke.sh` extended to `--color=256` + `--color=16`. M0-anticipated `src/hsv.cyr` split landed. 5 pre-existing main.cyr lint warnings cleared. DCE binary byte-identical at 351 200 B. |
 
 ### v1.0.0 — GA
 

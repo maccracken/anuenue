@@ -1,0 +1,172 @@
+# anuenue fuzz — M5 _emit_phase_esc.
+#
+# Target:
+#   _emit_phase_esc(line_buf, pos, phase) → new_pos
+#
+# Invariants the M8 audit (2026-05-22 § Finding 6) trusted:
+#   - phase % ANUENUE_PHASE_MOD normalized into [0, 1530) for any i64
+#   - Table entry length elen ∈ [0, 24] (payload fits in the 32-byte slot
+#     minus the 8-byte length prefix)
+#   - Returned new_pos == old_pos + elen (no spurious advancement)
+#   - Writes exactly elen bytes to line_buf[pos..pos+elen]
+#
+# Adversarial inputs covered:
+#   - i64::MIN, i64::MAX, zero, ±MOD, ±MOD - 1
+#   - Random i64 phases (Knuth MMIX LCG)
+#   - All four colour modes (TRUECOLOR / 256 / 16 / MONO) — table layout
+#     varies per mode; the M5 perf-pass invariant says elen is bounded by 24
+#     regardless
+
+include "src/hsv.cyr"
+include "src/color.cyr"
+include "src/filter.cyr"
+include "src/animate.cyr"
+
+var _fuzz_state = 0;
+
+fn _fuzz_seed(s) {
+    _fuzz_state = s;
+    return 0;
+}
+
+fn _fuzz_next_i64() {
+    _fuzz_state = _fuzz_state * 6364136223846793005 + 1442695040888963407;
+    return _fuzz_state;
+}
+
+# Sentinel byte before + after the line_buf write region. A buffer
+# overflow of any size would clobber one of these; we re-check after
+# every fuzz call.
+var SENTINEL_FRONT = 0xAA;
+var SENTINEL_BACK  = 0xBB;
+
+# Helper: build a line_buf with sentinels, call _emit_phase_esc, check
+# invariants. Returns 0 on success; assert-fails on bug.
+fn fuzz_one_phase(phase, line_buf, line_buf_size) {
+    var pos = 64;                              # arbitrary mid-buffer start
+    # Lay sentinels at both ends.
+    var i = 0;
+    while (i < line_buf_size) {
+        store8(line_buf + i, SENTINEL_FRONT);
+        i = i + 1;
+    }
+    # The last byte gets the back sentinel so a write to it stands out.
+    store8(line_buf + line_buf_size - 1, SENTINEL_BACK);
+
+    var new_pos = _emit_phase_esc(line_buf, pos, phase);
+    var elen = new_pos - pos;
+
+    # Invariant 1: elen >= 0
+    assert(elen >= 0, "_emit_phase_esc moved pos backward");
+    # Invariant 2: elen <= 24 (payload region of a 32-byte entry,
+    # 8-byte length prefix + 24-byte payload)
+    assert(elen <= 24, "_emit_phase_esc wrote more than 24 bytes");
+    # Invariant 3: the new_pos lands inside the line_buf, well clear
+    # of the back sentinel at line_buf[size-1].
+    assert(new_pos < line_buf_size - 1, "_emit_phase_esc wrote past line_buf");
+
+    # Invariant 4: the back sentinel survived the write.
+    var back = load8(line_buf + line_buf_size - 1);
+    assert(back == SENTINEL_BACK, "back sentinel clobbered — buffer overflow");
+
+    # Invariant 5: bytes before `pos` were not touched (they still
+    # hold SENTINEL_FRONT).
+    var j = 0;
+    while (j < pos) {
+        var b = load8(line_buf + j);
+        assert(b == SENTINEL_FRONT, "_emit_phase_esc wrote behind starting pos");
+        j = j + 1;
+    }
+    # Invariant 6: bytes after `new_pos` (up to back sentinel) were
+    # not touched.
+    var k = new_pos;
+    while (k < line_buf_size - 1) {
+        var b = load8(line_buf + k);
+        assert(b == SENTINEL_FRONT, "_emit_phase_esc wrote past new_pos");
+        k = k + 1;
+    }
+    return 0;
+}
+
+fn fuzz_emit_extreme_phases(line_buf, line_buf_size) {
+    # Boundary values that walked across the M8 audit's
+    # "what about negative phase?" question. Each must produce a
+    # valid table index after the modulo-normalize step.
+    var phases[16];
+    store64(&phases + 0 * 8, 0);
+    store64(&phases + 1 * 8, 1);
+    store64(&phases + 2 * 8, 1529);            # MOD - 1
+    store64(&phases + 3 * 8, 1530);            # = MOD, wraps to 0
+    store64(&phases + 4 * 8, 1531);
+    store64(&phases + 5 * 8, 0 - 1);
+    store64(&phases + 6 * 8, 0 - 1530);
+    store64(&phases + 7 * 8, 0 - 1531);
+    store64(&phases + 8 * 8, 9223372036854775807);   # i64::MAX
+    store64(&phases + 9 * 8, 0 - 9223372036854775807); # i64::MIN+1
+    # i64::MIN itself overflows when literally written; skip — the
+    # negation idiom Cyrius supports lands at i64::MIN + 1 above,
+    # which already exercises the boundary behaviour.
+
+    var i = 0;
+    while (i < 10) {
+        var phase = load64(&phases + i * 8);
+        fuzz_one_phase(phase, line_buf, line_buf_size);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn fuzz_emit_random_phases(seed, line_buf, line_buf_size) {
+    _fuzz_seed(seed);
+    var iters = 0;
+    while (iters < 1000) {
+        var phase = _fuzz_next_i64();
+        fuzz_one_phase(phase, line_buf, line_buf_size);
+        iters = iters + 1;
+    }
+    return 0;
+}
+
+# Run the full fuzz suite under one colour mode. The phase escape
+# table builds eagerly per mode; we reset it between mode runs.
+fn fuzz_under_mode(mode_name_or_zero, mode) {
+    # Reset the lazy-init table so the next call rebuilds it for
+    # this mode. Setting _PHASE_ESC_TABLE = 0 makes _phase_esc_init's
+    # idempotency check rebuild from scratch.
+    _PHASE_ESC_TABLE = 0;
+    ANUENUE_COLOR_MODE = mode;
+    if (_phase_esc_init() != 0) { return 1; }
+
+    var line_buf_size = 256;
+    var line_buf = alloc(line_buf_size);
+    if (line_buf == 0) { return 1; }
+
+    fuzz_emit_extreme_phases(line_buf, line_buf_size);
+    fuzz_emit_random_phases(mode_name_or_zero, line_buf, line_buf_size);
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+
+    # TRUECOLOR (mode 3) — the default. Largest escape, ~13–19 bytes.
+    fuzz_under_mode(7919, ANUENUE_COLOR_TRUE);
+
+    # COLOR_256 (mode 2) — `\x1b[38;5;Nm`, 8–11 bytes.
+    fuzz_under_mode(6271, ANUENUE_COLOR_256);
+
+    # COLOR_16 (mode 1) — `\x1b[9Nm`, 5 bytes.
+    fuzz_under_mode(5417, ANUENUE_COLOR_16);
+
+    # MONO (mode 0) — payload is 0 bytes; _emit_phase_esc must still
+    # be safe to call (filter loop dispatches to passthrough before
+    # reaching the emit, but the audit wants the function itself to
+    # be total).
+    fuzz_under_mode(4729, ANUENUE_COLOR_MONO);
+
+    println("fuzz_emit_phase_esc: all-mode invariants held");
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

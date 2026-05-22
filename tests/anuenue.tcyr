@@ -9,6 +9,7 @@
 #
 # Stdlib + darshana auto-included via cyrius.cyml.
 
+include "src/hsv.cyr"
 include "src/color.cyr"
 include "src/filter.cyr"
 include "src/animate.cyr"

@@ -80,6 +80,49 @@ pass "exit 0 after SIGINT"
 tail -c 50 "$OUT" | grep -q "${ESC}\[?25h" || fail "cursor-show NOT in last 50 bytes of SIGINT output — terminal left dirty"
 pass "cursor-show present in cleanup tail"
 
+# --- Animation under non-truecolor modes (v0.9.0) -----------------
+# The M5 phase cache + M6 colour-mode negotiation both wire into
+# `_render_frame` through `_emit_phase_esc`. Truecolor was the only
+# mode `animate-smoke` originally covered (above); 256-color and
+# 16-color paths went unexercised. The mid-cluster flush guard added
+# at M8 must hold under all three modes — different per-mode escape
+# lengths exercise different points along the FLUSH_RESERVE check.
+#
+# Asserted per mode:
+#   1. exit 0 over -d 1 (no crash, no hang)
+#   2. output non-empty
+#   3. cursor-hide / cursor-show present (M4 contract)
+#   4. cursor-up present (frame loop ran at least once)
+echo "[animate-smoke] --color=256 + -a"
+printf 'AGNOS\n' | "$BIN" --color=256 -a -d 1 > "$OUT" || fail "exit non-zero on --color=256 -a"
+pass "exit 0 after --color=256 -d 1"
+[ -s "$OUT" ] || fail "--color=256 produced no output"
+pass "--color=256 output non-empty ($(wc -c < "$OUT") bytes)"
+grep -q "${ESC}\[?25l" "$OUT" || fail "no cursor-hide in --color=256 output"
+grep -q "${ESC}\[?25h" "$OUT" || fail "no cursor-show in --color=256 output"
+grep -q "${ESC}\[[0-9][0-9]*A" "$OUT" || fail "no cursor-up in --color=256 — frame loop didn't repaint"
+pass "--color=256 frame loop + cursor lifecycle clean"
+# Sanity: the captured output contains the 256-color escape shape
+# (CSI 38;5;<n>m), not the truecolor one (CSI 38;2;<r>;<g>;<b>m).
+grep -q "${ESC}\[38;5;" "$OUT" || fail "no 256-color SGR (CSI 38;5;Nm) in --color=256 output"
+if grep -q "${ESC}\[38;2;" "$OUT"; then
+    fail "truecolor SGR (CSI 38;2;R;G;Bm) leaked into --color=256 output"
+fi
+pass "--color=256 emits 256-color SGR (no truecolor leak)"
+
+echo "[animate-smoke] --color=16 + -a"
+printf 'AGNOS\n' | "$BIN" --color=16 -a -d 1 > "$OUT" || fail "exit non-zero on --color=16 -a"
+pass "exit 0 after --color=16 -d 1"
+[ -s "$OUT" ] || fail "--color=16 produced no output"
+pass "--color=16 output non-empty ($(wc -c < "$OUT") bytes)"
+grep -q "${ESC}\[?25l" "$OUT" || fail "no cursor-hide in --color=16 output"
+grep -q "${ESC}\[?25h" "$OUT" || fail "no cursor-show in --color=16 output"
+grep -q "${ESC}\[[0-9][0-9]*A" "$OUT" || fail "no cursor-up in --color=16 — frame loop didn't repaint"
+pass "--color=16 frame loop + cursor lifecycle clean"
+# 16-color shape: CSI 9Nm (bright palette codes 91..97).
+grep -q "${ESC}\[9[1-7]m" "$OUT" || fail "no bright-16 SGR (CSI 9[1-7]m) in --color=16 output"
+pass "--color=16 emits bright-palette SGR"
+
 # --- M8 audit (2026-05-22) — long-cluster heap-overflow regression --
 # A grapheme cluster's byte length is unbounded in anuenue's
 # practical-subset classifier (base + N combining marks → 1 cluster).

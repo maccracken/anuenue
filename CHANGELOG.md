@@ -4,6 +4,107 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-05-22
+
+Post-v0.8.0 quality slot — no behavioural changes, no flag-surface
+changes, no dep bumps. Three threads land together:
+
+1. **Fuzz harness populated.** The carry-forward `tests/anuenue.fcyr`
+   stub (deferred since M0) is gone; in its place a real `fuzz/`
+   directory with five harnesses targeting every surface the M8
+   audit identified. `cyrius fuzz` is now CI-gated.
+2. **Animation smoke coverage broadens.** `scripts/animate-smoke.sh`
+   used to exercise only `--color=24bit`. The M5 phase cache + the
+   M6 colour-mode-aware escape build + the M8 mid-cluster flush
+   guard all wire through `_render_frame` — the new `--color=256` /
+   `--color=16` smoke sections confirm each per-mode escape path
+   completes a frame cycle and emits the right SGR shape.
+3. **Structural cleanup.** The M0-anticipated `src/hsv.cyr` split
+   finally lands (HSV→RGB integer math + `ANUENUE_PHASE_MOD` now
+   live in their own file). `src/main.cyr` flag registrations got
+   a column-width pass (closing the 5 pre-existing lint warnings
+   flagged during the v0.8.0 closeout).
+
+### Added
+
+- **`fuzz/` directory populated** with five harnesses driving the
+  surface the M8 audit identified. Each harness uses a Knuth-MMIX
+  LCG (the sankoch pattern) for deterministic seed-driven
+  exploration, layers invariant checks via `assert(…)` + `assert_eq(…)`,
+  and returns `assert_summary()` from `main()` so any failing
+  assertion sets a non-zero exit code (the `assert` library
+  prints-but-doesn't-abort; without this, a failing fuzz
+  invariant would silently pass CI). Combined assertion count:
+  **1 354 580** across the five harnesses, all green at v0.9.0
+  candidate.
+  - **`fuzz/flag-parser.fcyr`** (M2 target) — drives `flags_parse`
+    with random argv arrays built from a 40-token pool (valid
+    short/long flags, valid integer values, intentionally bad
+    ints, unknown flags, bundled forms, plain strings). Asserts
+    `rc ∈ {0, -1}` (the documented lib return shape — *not*
+    `rc >= 0`, which was the harness's own original bug caught on
+    first run), `flags_error ∈ {NONE, UNKNOWN, MISSING_VALUE,
+    BAD_INT, BUNDLED}`, and `rc == 0 ↔ err == NONE`. Includes the
+    empty-argv edge case and a per-flag solo-walk catching "long
+    form missing" regressions.
+  - **`fuzz/utf8.fcyr`** (M3 target) — `utf8_seq_len` over random
+    bytes (every result ∈ {0..4}); short-buffer truncation (if
+    `seqlen > 0` then `seqlen ≤ n - i` — no over-read);
+    `utf8_decode` round-trip (codepoint in `[0, 0x1FFFFF]` for
+    any validated sequence); `cp_is_extending` /
+    `cp_is_regional_indicator` totality over the full i64 range.
+  - **`fuzz/pretag-clusters.fcyr`** (M4 target) — `_pretag_clusters`
+    over random / ASCII / long-cluster (M8 attack shape) /
+    cap-exhaustion corpora. Asserts the cluster-table invariants
+    the M8 audit § Finding 5 listed (`n_clusters ≤ max_clusters`,
+    sentinel in `[0, n_bytes]`, offsets non-decreasing, never
+    writes past `ctab[max_clusters]`).
+  - **`fuzz/emit-phase-esc.fcyr`** (M5 target) — `_emit_phase_esc`
+    with extreme phase values (zero, ±MOD, ±MOD-1, i64::MAX,
+    near-i64::MIN) + random i64 phases, under all four colour
+    modes (TRUECOLOR / 256 / 16 / MONO). Front/back sentinel bytes
+    bracket the line buffer; the harness asserts neither sentinel
+    is clobbered, no write before `pos` or after `new_pos`, and
+    `new_pos - pos ≤ 24` (the entry payload bound).
+  - **`fuzz/rgb-quantizers.fcyr`** (M6 target) — `_channel_to_6`,
+    `_rgb_to_256`, `_rgb_to_16` over both in-range and full-i64
+    inputs. Asserts bucket / palette-index bounds (cube floor =
+    16, ceiling = 231; bright-16 floor = 91, ceiling = 97).
+- **`scripts/animate-smoke.sh` non-truecolor sections** — new
+  `--color=256` and `--color=16` runs under `-a`. Each asserts
+  clean exit, non-empty output, full cursor lifecycle (hide /
+  cursor-up / show), and the right per-mode SGR shape (CSI
+  `38;5;Nm` for 256; CSI `9[1-7]m` for 16; explicit no-leak check
+  that truecolor `38;2;…` doesn't appear under `--color=256`).
+- **`src/hsv.cyr`** — new file holding `ANUENUE_PHASE_MOD` and
+  `hsv_rainbow(phase, out_rgb)`. The M0-anticipated split that
+  had been deferred at every cut on the "wait for a second
+  consumer" rule; the fuzz harness's `emit-phase-esc` target was
+  the second consumer. `main.cyr` / `filter.cyr` / `animate.cyr`
+  / `tests/anuenue.tcyr` / `tests/anuenue.bcyr` all updated to
+  `include "src/hsv.cyr"` before `filter.cyr` (which references
+  `ANUENUE_PHASE_MOD`).
+
+### Changed
+
+- **`src/main.cyr` flag-registration column widths.** The 11
+  `flags_add_*` lines were over the 120-column lint threshold by
+  varying amounts (the M4 `-d` line ran to 144; the M6
+  `--no-color` / `--force-color` / `--color` block to ~150). Each
+  now uses a continuation indent for the help-text argument when
+  it doesn't fit on the registration line, and the short-flag
+  `# 'x'` trailing comment moved into a single block-level comment
+  above the registrations (the short-char codes are the
+  first-arg integer literals anyway). 5 pre-existing
+  `cyrius lint` warnings on `src/main.cyr:118-122` cleared.
+
+### Removed
+
+- **`tests/anuenue.fcyr` stub** — `cyrius fuzz` looks at `fuzz/*.fcyr`
+  not `tests/*.fcyr`; the empty stub at the wrong path served no
+  purpose and would have confused the next contributor wondering
+  why `cyrius fuzz` reported "No fuzz harnesses found in fuzz/".
+
 ## [0.8.0] — 2026-05-22
 
 M7 (docs) + M8 (security audit) folded into one cycle — the audit

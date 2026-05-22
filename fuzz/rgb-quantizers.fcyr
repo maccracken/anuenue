@@ -1,0 +1,162 @@
+# anuenue fuzz — M6 RGB quantizers.
+#
+# Targets:
+#   _channel_to_6(c)       — single-channel xterm 256-cube bucket
+#   _rgb_to_256(r, g, b)   — xterm 256-cube palette index (16..231)
+#   _rgb_to_16(r, g, b)    — bright-16 ANSI palette index (91..97)
+#
+# Invariants the M6 audit (2026-05-22) trusted but never stress-tested:
+#   - _channel_to_6 returns 0..5 for any i64 input
+#   - _rgb_to_256 returns 16..231 for any i64 RGB triple
+#   - _rgb_to_16 returns 91..97 for any i64 RGB triple
+#
+# Adversarial inputs covered:
+#   - in-range [0, 255] random triples (the documented input domain)
+#   - out-of-range [-i64::MAX, +i64::MAX] triples (channel math must
+#     still produce a valid bucket — graceful degradation, not OOB)
+#
+# Layered LCG seed for deterministic re-runs (the sankoch pattern).
+
+include "src/hsv.cyr"
+include "src/color.cyr"
+include "src/filter.cyr"
+include "src/animate.cyr"
+
+var _fuzz_state = 0;
+
+fn _fuzz_seed(s) {
+    _fuzz_state = s;
+    return 0;
+}
+
+# Knuth MMIX LCG. Returns the high 8 bits — well-mixed; the low bits
+# of a 64-bit LCG are weakly random.
+fn _fuzz_next() {
+    _fuzz_state = _fuzz_state * 6364136223846793005 + 1442695040888963407;
+    return (_fuzz_state >> 33) & 255;
+}
+
+# Return a random i64 — full 64-bit range. Used for "what if the
+# caller passes garbage" cases.
+fn _fuzz_next_i64() {
+    _fuzz_state = _fuzz_state * 6364136223846793005 + 1442695040888963407;
+    return _fuzz_state;
+}
+
+# _channel_to_6 must always return one of {0, 1, 2, 3, 4, 5}, for any
+# integer input — the function is the *only* thing standing between
+# possibly-out-of-range RGB math and the table lookup that becomes
+# `16 + 36*R + 6*G + B`. If it returns 6, `_rgb_to_256` lands at
+# index 232 (the xterm grayscale ramp — wrong palette). If it
+# returns negative, the index goes below 16 (the 16 base colours —
+# wrong palette). Either is a quantization bug.
+fn fuzz_channel_to_6_in_range(seed) {
+    _fuzz_seed(seed);
+    var iters = 0;
+    while (iters < 1000) {
+        var c = _fuzz_next();             # 0..255 — documented domain
+        var bucket = _channel_to_6(c);
+        assert(bucket >= 0, "_channel_to_6 returned negative for [0,255] input");
+        assert(bucket <= 5, "_channel_to_6 returned > 5 for [0,255] input");
+        iters = iters + 1;
+    }
+    return 0;
+}
+
+fn fuzz_channel_to_6_out_of_range(seed) {
+    _fuzz_seed(seed);
+    var iters = 0;
+    while (iters < 1000) {
+        var c = _fuzz_next_i64();          # full i64 — adversarial
+        var bucket = _channel_to_6(c);
+        assert(bucket >= 0, "_channel_to_6 returned negative for i64 input");
+        assert(bucket <= 5, "_channel_to_6 returned > 5 for i64 input");
+        iters = iters + 1;
+    }
+    return 0;
+}
+
+fn fuzz_rgb_to_256(seed) {
+    _fuzz_seed(seed);
+    var iters = 0;
+    while (iters < 1000) {
+        var r = _fuzz_next();
+        var g = _fuzz_next();
+        var b = _fuzz_next();
+        var idx = _rgb_to_256(r, g, b);
+        # 6×6×6 cube: 16 + 36*[0..5] + 6*[0..5] + [0..5] = 16..231.
+        assert(idx >= 16, "_rgb_to_256 below xterm cube floor");
+        assert(idx <= 231, "_rgb_to_256 above xterm cube ceiling");
+        iters = iters + 1;
+    }
+    return 0;
+}
+
+fn fuzz_rgb_to_256_out_of_range(seed) {
+    _fuzz_seed(seed);
+    var iters = 0;
+    while (iters < 1000) {
+        var r = _fuzz_next_i64();
+        var g = _fuzz_next_i64();
+        var b = _fuzz_next_i64();
+        var idx = _rgb_to_256(r, g, b);
+        assert(idx >= 16, "_rgb_to_256 out-of-range input fell below cube");
+        assert(idx <= 231, "_rgb_to_256 out-of-range input rose above cube");
+        iters = iters + 1;
+    }
+    return 0;
+}
+
+# _rgb_to_16 maps to bright-palette codes: red=91, green=92, yellow=93,
+# blue=94, magenta=95, cyan=96, white=97. The HSV rainbow at S=V=1
+# never hits the (R≥128, G≥128, B≥128) → 97 white triple, but the
+# function must still produce a valid code on any input.
+fn fuzz_rgb_to_16(seed) {
+    _fuzz_seed(seed);
+    var iters = 0;
+    while (iters < 1000) {
+        var r = _fuzz_next();
+        var g = _fuzz_next();
+        var b = _fuzz_next();
+        var code = _rgb_to_16(r, g, b);
+        assert(code >= 91, "_rgb_to_16 below bright-palette floor");
+        assert(code <= 97, "_rgb_to_16 above bright-palette ceiling");
+        iters = iters + 1;
+    }
+    return 0;
+}
+
+fn fuzz_rgb_to_16_out_of_range(seed) {
+    _fuzz_seed(seed);
+    var iters = 0;
+    while (iters < 1000) {
+        var r = _fuzz_next_i64();
+        var g = _fuzz_next_i64();
+        var b = _fuzz_next_i64();
+        var code = _rgb_to_16(r, g, b);
+        assert(code >= 91, "_rgb_to_16 out-of-range input fell below palette");
+        assert(code <= 97, "_rgb_to_16 out-of-range input rose above palette");
+        iters = iters + 1;
+    }
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+
+    var seed = 1;
+    while (seed <= 5) {
+        fuzz_channel_to_6_in_range(seed * 7919);
+        fuzz_channel_to_6_out_of_range(seed * 6271);
+        fuzz_rgb_to_256(seed * 5417);
+        fuzz_rgb_to_256_out_of_range(seed * 4729);
+        fuzz_rgb_to_16(seed * 3919);
+        fuzz_rgb_to_16_out_of_range(seed * 3187);
+        seed = seed + 1;
+    }
+    println("fuzz_rgb_quantizers: 30000 quantization invariants held");
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

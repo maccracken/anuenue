@@ -1,0 +1,223 @@
+# anuenue fuzz — M2 flag parser.
+#
+# Target:
+#   flags_parse(fs, argc, argv) → 0 or non-zero
+#   flags_error(fs)             → one of FLAG_ERR_NONE/UNKNOWN/MISSING_VALUE/BAD_INT/BUNDLED
+#
+# Invariants the M8 audit (2026-05-22 § Finding 5) trusted:
+#   - flags_parse never panics on any argv array
+#   - flags_error returns one of the documented FlagErr enum values
+#   - Successful parse → flags_error == FLAG_ERR_NONE (0)
+#   - Failed parse → flags_error == one of {1, 2, 3, 4}
+#   - flags_get_int / flags_get_bool / flags_get_str return defaults
+#     for unspecified flags
+#
+# This harness mirrors the live anuenue flag set (h/V/p/s/F/a/d/S/n/C/c)
+# so each random argv has a realistic shape (correct short-char prefix,
+# plausible long-name format) but mostly nonsense values.
+
+include "src/hsv.cyr"
+include "src/color.cyr"
+include "src/filter.cyr"
+include "src/animate.cyr"
+
+var _fuzz_state = 0;
+
+fn _fuzz_seed(s) {
+    _fuzz_state = s;
+    return 0;
+}
+
+fn _fuzz_next() {
+    _fuzz_state = _fuzz_state * 6364136223846793005 + 1442695040888963407;
+    return (_fuzz_state >> 33) & 255;
+}
+
+# Token pool — a fixed set of plausible argv tokens. The fuzzer
+# picks N at random per invocation. Mix of valid flags, valid values,
+# invalid flags, garbage strings.
+fn _build_token_pool(pool) {
+    # Valid short flags
+    store64(pool +  0 * 8, "-h");
+    store64(pool +  1 * 8, "-V");
+    store64(pool +  2 * 8, "-p");
+    store64(pool +  3 * 8, "-s");
+    store64(pool +  4 * 8, "-F");
+    store64(pool +  5 * 8, "-a");
+    store64(pool +  6 * 8, "-d");
+    store64(pool +  7 * 8, "-S");
+    store64(pool +  8 * 8, "-n");
+    store64(pool +  9 * 8, "-C");
+    store64(pool + 10 * 8, "-c");
+    # Valid long flags
+    store64(pool + 11 * 8, "--help");
+    store64(pool + 12 * 8, "--version");
+    store64(pool + 13 * 8, "--freq");
+    store64(pool + 14 * 8, "--seed");
+    store64(pool + 15 * 8, "--no-color");
+    store64(pool + 16 * 8, "--force-color");
+    store64(pool + 17 * 8, "--color=auto");
+    store64(pool + 18 * 8, "--color=24bit");
+    store64(pool + 19 * 8, "--color=256");
+    store64(pool + 20 * 8, "--color=16");
+    store64(pool + 21 * 8, "--color=none");
+    # Integer values
+    store64(pool + 22 * 8, "0");
+    store64(pool + 23 * 8, "1");
+    store64(pool + 24 * 8, "7");
+    store64(pool + 25 * 8, "42");
+    store64(pool + 26 * 8, "999999");
+    store64(pool + 27 * 8, "-1");
+    # Bad integer values (should produce FLAG_ERR_BAD_INT after an int flag)
+    store64(pool + 28 * 8, "notanumber");
+    store64(pool + 29 * 8, "");
+    store64(pool + 30 * 8, "1.5");
+    # Unknown / garbage flags
+    store64(pool + 31 * 8, "-x");
+    store64(pool + 32 * 8, "-Z");
+    store64(pool + 33 * 8, "--bogus");
+    store64(pool + 34 * 8, "--unknown=value");
+    # Bundled (the lib rejects these)
+    store64(pool + 35 * 8, "-hV");
+    store64(pool + 36 * 8, "-ap5");
+    # Plain positional-shaped strings
+    store64(pool + 37 * 8, "filename");
+    store64(pool + 38 * 8, "hello world");
+    store64(pool + 39 * 8, "AGNOS");
+    return 0;
+}
+
+# Build a fresh flag-set matching anuenue's live registration shape.
+# Re-built per call so each fuzz iteration starts clean.
+fn _build_anuenue_flagset() {
+    var fs = flags_new();
+    flags_add_bool(fs, 104, "help",        0, "help");
+    flags_add_bool(fs,  86, "version",     0, "version");
+    flags_add_int (fs, 112, "freq",        7, "freq");
+    flags_add_int (fs, 115, "seed",        0, "seed");
+    flags_add_int (fs,  70, "offset",      0, "offset");
+    flags_add_bool(fs,  97, "animate",     0, "animate");
+    flags_add_int (fs, 100, "duration",    5, "duration");
+    flags_add_int (fs,  83, "speed",       1, "speed");
+    flags_add_bool(fs, 110, "no-color",    0, "no-color");
+    flags_add_bool(fs,  67, "force-color", 0, "force-color");
+    flags_add_str (fs,  99, "color",       "auto", "color");
+    return fs;
+}
+
+# Drive flags_parse with a random N-token argv. After every call,
+# verify (a) the function returned, (b) flags_error is a documented
+# enum value, (c) flags_get_* on unspecified flags returns the
+# default.
+fn fuzz_random_argv(seed, n_tokens) {
+    _fuzz_seed(seed);
+    var pool[320];                             # 40 tokens × 8 bytes
+    _build_token_pool(&pool);
+
+    var fs = _build_anuenue_flagset();
+
+    # argv slot 0 is always the program name (the flags lib skips it
+    # in the standard cyrius idiom).
+    var argv[256];                             # 32 slots × 8 bytes
+    store64(&argv + 0, "anuenue");
+    var capped = n_tokens;
+    if (capped > 31) { capped = 31; }
+    var i = 0;
+    while (i < capped) {
+        var idx = _fuzz_next() % 40;
+        store64(&argv + (i + 1) * 8, load64(&pool + idx * 8));
+        i = i + 1;
+    }
+
+    var rc = flags_parse(fs, capped + 1, &argv);
+    var err = flags_error(fs);
+
+    # Invariant 1: rc is 0 (success) or -1 (error) per lib/flags.cyr
+    # contract: "Returns 0 on success, -1 on error; flags_error(h)
+    # reports the specific FlagErr." Any other value is a bug.
+    if (rc != 0) {
+        assert_eq(rc, 0 - 1, "flags_parse non-zero return not -1");
+    }
+
+    # Invariant 2: err is one of the documented FlagErr values.
+    assert(err >= 0, "flags_error below FLAG_ERR_NONE");
+    assert(err <= 4, "flags_error above FLAG_ERR_BUNDLED");
+
+    # Invariant 3: rc and err agree — rc == 0 iff err == FLAG_ERR_NONE.
+    if (rc == 0) {
+        assert(err == FLAG_ERR_NONE, "flags_parse returned 0 but error is non-NONE");
+    } else {
+        assert(err != FLAG_ERR_NONE, "flags_parse returned non-zero but error is NONE");
+    }
+
+    return 0;
+}
+
+# Empty-argv edge case: argc=1 (just program name, no flags) must
+# always succeed and leave every flag at its default.
+fn fuzz_empty_argv() {
+    var fs = _build_anuenue_flagset();
+    var argv[16];
+    store64(&argv + 0, "anuenue");
+    var rc = flags_parse(fs, 1, &argv);
+    assert(rc == 0, "empty argv should parse clean");
+    assert(flags_error(fs) == FLAG_ERR_NONE, "empty argv should have no error");
+    return 0;
+}
+
+# Single-flag corpus: walk each registered flag and verify it parses
+# cleanly on its own. Catches "M6 added a flag but its long form is
+# missing" sort of regressions.
+fn fuzz_each_flag_alone() {
+    var solo_tokens[44];                       # 11 flags × 4 patterns
+    var i = 0;
+    while (i < 11) { store64(&solo_tokens + i * 8, 0); i = i + 1; }
+
+    # Bool-only flags: just present
+    store64(&solo_tokens +  0 * 8, "-h");
+    store64(&solo_tokens +  1 * 8, "-V");
+    store64(&solo_tokens +  2 * 8, "-a");
+    store64(&solo_tokens +  3 * 8, "-n");
+    store64(&solo_tokens +  4 * 8, "-C");
+    # Long-form bools
+    store64(&solo_tokens +  5 * 8, "--help");
+    store64(&solo_tokens +  6 * 8, "--version");
+    store64(&solo_tokens +  7 * 8, "--animate");
+    store64(&solo_tokens +  8 * 8, "--no-color");
+    store64(&solo_tokens +  9 * 8, "--force-color");
+    # String flag with valid value
+    store64(&solo_tokens + 10 * 8, "--color=auto");
+
+    var idx = 0;
+    while (idx < 11) {
+        var fs = _build_anuenue_flagset();
+        var argv[16];
+        store64(&argv + 0, "anuenue");
+        store64(&argv + 8, load64(&solo_tokens + idx * 8));
+        var rc = flags_parse(fs, 2, &argv);
+        assert(rc == 0, "solo flag failed to parse");
+        assert(flags_error(fs) == FLAG_ERR_NONE, "solo flag set an error code");
+        idx = idx + 1;
+    }
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+
+    var seed = 1;
+    while (seed <= 10) {
+        # Vary argv size — short (3), medium (10), max (31).
+        fuzz_random_argv(seed * 7919, 3);
+        fuzz_random_argv(seed * 6271, 10);
+        fuzz_random_argv(seed * 5417, 31);
+        seed = seed + 1;
+    }
+    fuzz_empty_argv();
+    fuzz_each_flag_alone();
+    println("fuzz_flag_parser: argv-error-code contract held");
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

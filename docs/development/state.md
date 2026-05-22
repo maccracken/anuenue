@@ -5,9 +5,50 @@
 
 ## Version
 
-**0.8.0** — *current.* cut 2026-05-22 (ninth release; fifth
-same-day cut). **M7 (docs) + M8 (security audit) folded into one
-cycle.** M7 shipped three ADRs (0001 pipe-purity / 0002 HSV-inline /
+**0.9.0** — *current.* cut 2026-05-22 (tenth release; sixth same-
+day cut). **Quality slot — fuzz harness + animation smoke
+breadth + structural cleanup.** No behavioural changes, no flag-
+surface changes, no dep bumps. Three threads landed together:
+
+1. **`fuzz/` directory populated.** Five harnesses targeting the
+   surfaces the M8 audit identified — flag parser, UTF-8,
+   `_pretag_clusters`, `_emit_phase_esc`, RGB quantizers — each
+   using a Knuth-MMIX LCG for deterministic seed-driven
+   exploration and returning `assert_summary()` so failed
+   invariants set a non-zero exit code (the `assert` library
+   prints-but-doesn't-abort; the exit-code propagation is what
+   makes `cyrius fuzz` a real CI gate). Combined **1 354 580
+   assertions** per run, zero failures. CI wired (`cyrius fuzz`
+   step in `.github/workflows/ci.yml`).
+2. **Animation smoke breadth.** `scripts/animate-smoke.sh` now
+   covers `--color=256` and `--color=16` under `-a` in addition
+   to the M4 truecolor path + M8 long-cluster regression. Each
+   per-mode section asserts clean exit, full cursor lifecycle,
+   and the per-mode SGR shape (CSI `38;5;Nm` for 256-color, CSI
+   `9[1-7]m` for 16-color; explicit no-leak check that truecolor
+   `38;2;…` doesn't appear under `--color=256`). Closes the
+   carry-forward documented since v0.7.0.
+3. **Structural cleanup.** The M0-anticipated `src/hsv.cyr` split
+   finally lands — `ANUENUE_PHASE_MOD` + `hsv_rainbow` extracted
+   into their own file. Triggered by the fuzz harness's
+   `emit-phase-esc` target wanting a clean boundary; ADR 0002
+   documents the broader "HSV inline, not abaco" reasoning.
+   Plus a column-width pass on `src/main.cyr`'s flag-registration
+   lines clearing the 5 pre-existing `cyrius lint` warnings
+   flagged during the v0.8.0 closeout. DCE binary unchanged at
+   **351 200 B** — the v0.9.0 work didn't touch the production
+   surface, only moved code between files + added test/fuzz
+   infrastructure.
+
+Bug caught on the harness's own first run: my initial
+`fuzz/flag-parser.fcyr` asserted `rc >= 0` but `lib/flags.cyr`
+documents `flags_parse` as returning `-1` on error. Without the
+exit-code-propagation change (`return assert_summary()`), the
+failed assertion would have silently passed CI 12 times per run.
+Fixed before the harness landed.
+
+**0.8.0** — cut 2026-05-22 (ninth release; fifth same-day cut).
+**M7 (docs) + M8 (security audit) folded into one cycle.** M7 shipped three ADRs (0001 pipe-purity / 0002 HSV-inline /
 0003 grapheme-cluster cycling), the
 [`docs/guides/integrating-anuenue.md`](../guides/integrating-anuenue.md)
 downstream-consumer guide, eight runnable examples under
@@ -115,6 +156,15 @@ filter — pure scaffold release.
 
 ## Phase
 
+**Quality slot (v0.9.0) — shipped.** Fuzz harness, animation
+smoke breadth, structural cleanup. See the v0.9.0 entry under
+Version above for the per-thread breakdown. No behavioural surface
+delta vs v0.8.0; the production binary is byte-identical in size.
+With both quality carry-forwards closed (fuzz + animation non-
+truecolor), the only outstanding pre-v1.0 work is the consumer
+soak window — both Dogfooded and Downstream gate need an external
+consumer wiring anuenue in for a minor-cycle window.
+
 **M7 (docs) + M8 (audit) — shipped at v0.8.0.** Doc half of the
 v1.0 surface lock + the pre-v1.0 security pass, landed in one
 cycle. ADRs 0001/0002/0003 record the rule that shapes everything
@@ -198,8 +248,9 @@ in for a minor-cycle soak window. Tagged on user signal per
 
 | File | Lines | Surface |
 |------|-------|---------|
+| `src/hsv.cyr` | ~95 | **NEW at v0.9.0** (the M0-anticipated split). Holds `ANUENUE_PHASE_MOD = 1530` + `hsv_rainbow(phase, out_rgb)` — the integer 6-sector S=V=1 HSV→RGB. Move was triggered by `fuzz/emit-phase-esc.fcyr` wanting a clean target boundary; ADR 0002 (HSV inline) documents the broader "don't pull abaco" decision. `main.cyr` / `filter.cyr` / `animate.cyr` / `tests/anuenue.tcyr` / `tests/anuenue.bcyr` all include this before `filter.cyr` since filter references `ANUENUE_PHASE_MOD`. |
 | `src/color.cyr` | ~200 | **NEW at M6 (v0.7.0)**. Color mode enum (`ANUENUE_COLOR_MONO`/`_16`/`_256`/`_TRUE`); override-string parser + enum mapping (`_color_override_from_str` / `_color_mode_from_override`); RGB quantization (`_channel_to_6`, `_rgb_to_256` xterm cube; `_rgb_to_16` bright-palette); `anuenue_detect_color_mode(no_color, force_color, override)` reading getenv + darshana 0.5.3's `tty_isatty`; `anuenue_passthrough()` MONO bypass (read/write loop, no escapes). Sandhi closeout at v0.7.1 removed the three `_*_compat` stand-ins. |
-| `src/filter.cyr` | ~545 | `ANUENUE_*` constants + **`ANUENUE_ESC_TABLE_ENTRY_SIZE`** (M5). `hsv_rainbow(phase, out_rgb)` integer 6-sector HSV. M3: `utf8_seq_len` / `utf8_decode` / `cp_is_extending` (M5: binary-searched LUT) / `cp_is_regional_indicator`. M5: `_phase_esc_init()` / `_emit_phase_esc()` / `_PHASE_ESC_TABLE` (1 530 × 32 B heap; idempotent). **M6 (v0.7.0)**: `_phase_esc_init` branches on `ANUENUE_COLOR_MODE` to populate per-mode escapes (TRUECOLOR via `tty_fg_rgb_buf`, 256 via `tty_fg_256_buf`, 16 via `tty_sgr_buf`). `anuenue_filter()` keeps the M5 hot path; ASCII short-circuit unchanged. **Unaffected by the M8 audit fix** — writes one codepoint per iteration with the reserve check between, so the long-cluster overrun doesn't reach the filter path. |
+| `src/filter.cyr` | ~480 | `ANUENUE_*` constants + **`ANUENUE_ESC_TABLE_ENTRY_SIZE`** (M5). `hsv_rainbow` + `ANUENUE_PHASE_MOD` extracted at v0.9.0 — now live in `src/hsv.cyr`. M3: `utf8_seq_len` / `utf8_decode` / `cp_is_extending` (M5: binary-searched LUT) / `cp_is_regional_indicator`. M5: `_phase_esc_init()` / `_emit_phase_esc()` / `_PHASE_ESC_TABLE` (1 530 × 32 B heap; idempotent). **M6 (v0.7.0)**: `_phase_esc_init` branches on `ANUENUE_COLOR_MODE` to populate per-mode escapes (TRUECOLOR via `tty_fg_rgb_buf`, 256 via `tty_fg_256_buf`, 16 via `tty_sgr_buf`). `anuenue_filter()` keeps the M5 hot path; ASCII short-circuit unchanged. **Unaffected by the M8 audit fix** — writes one codepoint per iteration with the reserve check between, so the long-cluster overrun doesn't reach the filter path. |
 | `src/animate.cyr` | ~290 | M4 surface (animation: slurp + pretag + frame loop + signalfd). M5: ASCII short-circuit in `_pretag_clusters`; `_render_frame` routes through `_emit_phase_esc`; `_phase_esc_init` shared with filter. M6: animation benefits from per-mode escapes via the same path; MONO never reaches animation (main.cyr dispatches to passthrough first). **M8 (v0.8.0) fix**: `_render_frame`'s cluster-bytes copy loop got an inline mid-cluster flush guard — when the reserve threshold trips before all cluster bytes are written, flush + re-emit the same `phase` escape so the next bytes render under the same colour. Closes the long-cluster heap overflow surfaced by the audit. |
 | `src/main.cyr` | ~135 | Entrypoint + flag dispatch. args_init / alloc_init / flags context (M6 added `-n` / `-C` / `-c` to the M2/M4 sets) / argv pack / flags_parse / **M6 colour-mode detect step writes `ANUENUE_COLOR_MODE`**; dispatch to print_version / print_usage / **anuenue_passthrough (MONO) or anuenue_animate (-a) or anuenue_filter**. |
 | `src/version_str.cyr` | ~18 | **AUTO-GENERATED** by `scripts/version-bump.sh`. Holds `_VERSION_STR_ANUENUE` + `_VERSION_LEN_ANUENUE`. Never hand-edit; CI's Version consistency step asserts the literal matches `VERSION`. |
@@ -216,16 +267,15 @@ buffer wants to live next to the geometry.
 
 ## Binary
 
-- **Size (0.8.0, DCE on)**: **351 200 bytes** (~343 KB). Delta vs
-  0.7.1: **+712 bytes** — M8 mid-cluster flush guard + the new
-  tcyr M8 audit group + the unreached-by-DCE post-fix code
-  paths.
+- **Size (0.9.0, DCE on)**: **351 200 bytes** (~343 KB). Delta vs
+  0.8.0: **±0 bytes** — v0.9.0 added fuzz/ + smoke variants +
+  the hsv.cyr split, but none of that work touched the
+  production binary surface (DCE resolves the same reachable
+  function set; moving `hsv_rainbow` between files doesn't
+  change linkage). Cleanest possible quality-slot signal.
 - **DCE elimination**: 1 240 unreachable fns, 219 668 bytes NOPed.
-- **Cap discipline (v0.7.1+)**: **512 KB**. The cap's role is
-  regression detection (catch surprise bloat between minor cuts),
-  not a hard envelope; current headroom ~161 KB through M7 / M8 /
-  v1.0.
-- **Prior floors**: 0.7.1 = 350 488 B, 0.7.0 = 349 832 B, 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
+- **Cap discipline (v0.7.1+)**: **512 KB**. Current headroom ~161 KB.
+- **Prior floors**: 0.8.0 = 351 200 B, 0.7.1 = 350 488 B, 0.7.0 = 349 832 B, 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
 - **Output path**: `build/anuenue`
 
 ## Tests
@@ -234,9 +284,9 @@ buffer wants to live next to the geometry.
 |------|--------|
 | `tests/anuenue.tcyr` | **245 assertions across 35 groups**. M1: smoke/HSV/geometry/constants (47). M2: flags (27). M3: utf8_seq_len/decode/cp_is_extending/cp_is_regional_indicator (30). M4: animate constants + _pretag_clusters + _count_lf_clusters + _input_ends_with_lf + -a/-d/-S flag parsing (42). M5: phase-cache idempotency, byte-identical round-trip, phase normalization, table layout (26). M6: mode enum + override parser + `_channel_to_6` bucket boundaries + `_rgb_to_256` canonical hues + `_rgb_to_16` bright-palette quantization + 256/16 escape framing + bounds rejection (69). **M8 (v0.8.0): "_pretag_clusters long-combiner chain" (4)** — A + 511 combiners → 1 cluster spanning 1023 bytes; locks the unbounded-cluster invariant the M8 audit fix relies on. End-to-end behaviour owned by golden + animate-smoke (+ M8 long-cluster section) + perf-bench. |
 | `tests/anuenue.bcyr` | 2 micro-benchmarks: `hsv_rainbow` ≈8 ns/call, `tty_fg_rgb_buf` ≈45 ns/call. Pre-M5 the filter loop called both per cluster; M5+ uses `_emit_phase_esc` (~10 ns/call) instead. The micros still measure the table-build path. |
-| `tests/anuenue.fcyr` | fuzz stub — first harness still pending. Targets: M2 flag parser, M3 UTF-8 surface, M4 `_pretag_clusters`, M5 `_emit_phase_esc`, and (M6) `_rgb_to_256` / `_rgb_to_16` over random RGB triples. |
+| `fuzz/*.fcyr` (v0.9.0+) | **Five harnesses populated.** `flag-parser.fcyr` (M2), `utf8.fcyr` (M3), `pretag-clusters.fcyr` (M4), `emit-phase-esc.fcyr` (M5), `rgb-quantizers.fcyr` (M6). Each uses a Knuth-MMIX LCG for deterministic seed-driven exploration; each returns `assert_summary()` so failed invariants set a non-zero exit code. Combined: **1 354 580 assertions** at v0.9.0 candidate, zero failures. `cyrius fuzz` is the gate; runs in CI. Previous `tests/anuenue.fcyr` stub deleted (wrong path; `cyrius fuzz` looks at `fuzz/*.fcyr`). |
 | `tests/golden/*.out` | **Six fixtures**. M2/M3: `agnos-rainbow-s100` (238 B), `cjk-mixed-s0` (125 B), `combining-s0` (155 B), `zwj-flag-s0` (135 B). **M6: `agnos-rainbow-256-s100.out` (160 B), `agnos-rainbow-16-s100.out` (82 B)**. All six byte-identical across the M5/M6/M8 cuts — proves the mode-aware phase cache matches runtime exactly and that the M8 fix is local to the long-cluster path. Plus three MONO equivalence checks in golden-check.sh (`NO_COLOR=1 anuenue` / `--no-color` / `--color=none` all byte-identical to input). |
-| `scripts/animate-smoke.sh` | M4 (v0.5.0). Animation structural guard. M6: invokes with `--color=24bit` so the TTY-detection in M6 doesn't drop the test into MONO. **M8 (v0.8.0) extension**: long-cluster section runs the historical attack (base + 16 000 combining acutes), asserts clean exit and full byte preservation (~976 000 combiner bytes over 61 frames) through the mid-cluster flushes. |
+| `scripts/animate-smoke.sh` | M4 (v0.5.0). Animation structural guard. M6: invokes with `--color=24bit` so the TTY-detection in M6 doesn't drop the test into MONO. **M8 (v0.8.0) extension**: long-cluster section runs the historical attack (base + 16 000 combining acutes), asserts clean exit and full byte preservation (~976 000 combiner bytes over 61 frames) through the mid-cluster flushes. **v0.9.0 extensions**: `--color=256` + `--color=16` per-mode sections — each asserts clean exit, non-empty output, full cursor lifecycle, and the per-mode SGR shape (CSI 38;5;Nm for 256, CSI 9[1-7]m for 16; explicit no-leak check that truecolor 38;2;… doesn't appear under `--color=256`). |
 | `scripts/perf-bench.sh` | M5 (v0.6.0). End-to-end ASCII + UTF-8 per-byte overhead. M6: invokes with `--color=24bit` for the same reason. The M5 ratchet. Latest run at v0.8.0: ASCII no-LF **45.94 ns/byte** (filter path untouched by M8). |
 
 Assertion count history: M1 47 → M2 74 (+27) → M3 104 (+30) → M4 146 (+42) → M5 172 (+26) → M6 241 (+69) → M8 245 (+4).
@@ -284,16 +334,13 @@ Anticipated at v0.7+:
   parser robustness) are recorded for future reference. Capability
   surface confirmed clean and recorded as the v1.0 baseline.
   Carry-forward note retired.
-- **`tests/anuenue.fcyr`** — fuzz harness stub still empty. Five
-  natural targets: M2 flag parser, M3 UTF-8 surface, M4
-  `_pretag_clusters`, M5 `_emit_phase_esc`, M6 `_rgb_to_256` /
-  `_rgb_to_16`. Defer until v1.0+ or a real bug observed in the
-  target surface.
-- **Animation under non-truecolor modes** — `_pretag_clusters` +
-  `_render_frame` already exercise the per-mode escape table, so
-  `anuenue -a --color=16 < poem.txt` works visibly. animate-smoke
-  exercises `--color=24bit` only. Add structural smoke variants
-  if a consumer surfaces a regression.
+- **Fuzz harness — closed at v0.9.0.** Five harnesses live in
+  `fuzz/`. Combined 1 354 580 assertions across deterministic
+  seed sweeps; CI-gated via `cyrius fuzz`. Carry-forward retired.
+- **Animation under non-truecolor modes — closed at v0.9.0.**
+  `scripts/animate-smoke.sh` now covers `--color=256` and
+  `--color=16` under `-a` with full cursor-lifecycle + SGR-shape
+  assertions. Carry-forward retired.
 - **Dogfooded + Downstream gate (v1.0 acceptance)** — the
   remaining two v1.0 criteria need at least one external
   consumer wiring anuenue in for a minor-cycle soak window.

@@ -67,8 +67,19 @@ jobs:
         # cursor-show framing present, at least one cursor-up
         # between frames. Specifically catches the "terminal left
         # with hidden cursor after SIGINT" regression class that
-        # the M4 acceptance criterion calls out.
+        # the M4 acceptance criterion calls out. v0.8.0 added the
+        # M8-audit long-cluster regression section; v0.9.0 added
+        # the --color=256 / --color=16 + -a per-mode sections.
         run: sh scripts/animate-smoke.sh
+
+      - name: Fuzz harness (v0.9.0)
+        # Five fcyr harnesses in fuzz/ target the surfaces the M8
+        # audit identified: flag parser, UTF-8, _pretag_clusters,
+        # _emit_phase_esc, RGB quantizers. Each uses a Knuth-MMIX
+        # LCG for deterministic seed-driven exploration and returns
+        # assert_summary() so failing invariants set a non-zero
+        # exit. ~1.35M assertions per run on the current corpus.
+        run: cyrius fuzz
 
       - name: Version consistency
         # Asserts VERSION matches every place the version literal

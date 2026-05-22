@@ -19,6 +19,7 @@
 # the cyim drift-prevention pattern; never edit by hand).
 # Stdlib (incl. args, flags) + darshana auto-included via cyrius.cyml.
 
+include "src/hsv.cyr"
 include "src/color.cyr"
 include "src/filter.cyr"
 include "src/animate.cyr"
@@ -108,18 +109,23 @@ fn main(): i64 {
     var argv_arr[2048];                     # 256 slots × 8 bytes
     build_argv_array(&argv_arr);
 
+    # Flag registrations. Short-char codes (h/V/p/s/F/a/d/S/n/C/c)
+    # in the first arg; long names + defaults + help text follow.
     var fs = flags_new();
-    var f_help     = flags_add_bool(fs, 104, "help",     0, "show this help and exit");                  # 'h'
-    var f_version  = flags_add_bool(fs, 86,  "version",  0, "print version and exit");                   # 'V'
-    var f_freq     = flags_add_int (fs, 112, "freq",     ANUENUE_PHASE_STEP, "phase step per character");# 'p'
-    var f_seed     = flags_add_int (fs, 115, "seed",     0, "starting hue phase (deterministic)");       # 's'
-    var f_offset   = flags_add_int (fs, 70,  "offset",   0, "additive phase offset (Ruby lolcat compat)"); # 'F'
-    var f_animate  = flags_add_bool(fs, 97,  "animate",  0, "animate: buffer input, scroll the rainbow");# 'a'
-    var f_duration = flags_add_int (fs, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "animation duration in seconds (0 = until SIGINT)"); # 'd'
-    var f_speed    = flags_add_int (fs, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "animation: phase advance per frame");# 'S'
-    var f_no_color    = flags_add_bool(fs, 110, "no-color",    0, "disable colour (pass-through cat)");                                # 'n'
-    var f_force_color = flags_add_bool(fs, 67,  "force-color", 0, "emit colour even when stdout isn't a TTY");                        # 'C'
-    var f_color       = flags_add_str (fs, 99,  "color",       "auto", "color mode: auto / 24bit / 256 / 16 / none");                  # 'c'
+    var f_help        = flags_add_bool(fs, 104, "help",        0, "show this help and exit");
+    var f_version     = flags_add_bool(fs,  86, "version",     0, "print version and exit");
+    var f_freq        = flags_add_int (fs, 112, "freq",        ANUENUE_PHASE_STEP, "phase step per character");
+    var f_seed        = flags_add_int (fs, 115, "seed",        0, "starting hue phase (deterministic)");
+    var f_offset      = flags_add_int (fs,  70, "offset",      0, "additive phase offset (Ruby lolcat compat)");
+    var f_animate     = flags_add_bool(fs,  97, "animate",     0, "animate: buffer input, scroll the rainbow");
+    var f_duration    = flags_add_int (fs, 100, "duration",    ANUENUE_DEFAULT_DURATION_S,
+                                       "animation duration in seconds (0 = until SIGINT)");
+    var f_speed       = flags_add_int (fs,  83, "speed",       ANUENUE_DEFAULT_SPEED,
+                                       "animation: phase advance per frame");
+    var f_no_color    = flags_add_bool(fs, 110, "no-color",    0, "disable colour (pass-through cat)");
+    var f_force_color = flags_add_bool(fs,  67, "force-color", 0, "emit colour even when stdout isn't a TTY");
+    var f_color       = flags_add_str (fs,  99, "color",       "auto",
+                                       "color mode: auto / 24bit / 256 / 16 / none");
 
     if (flags_parse(fs, ac, &argv_arr) != 0) {
         # Surface the specific error first so the user knows which
