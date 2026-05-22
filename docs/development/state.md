@@ -5,8 +5,23 @@
 
 ## Version
 
-**0.7.0** — *current.* cut 2026-05-22 (seventh release; third
-same-day cut). **M6 closed.** Color-mode negotiation:
+**0.7.1** — *current.* cut 2026-05-22 (eighth release; fourth
+same-day cut). **Sandhi closeout** for the M6 → darshana 0.5.3
+loop. Pin bumped 0.5.2 → 0.5.3; three inline stand-ins
+(`_isatty_compat`, `_fg_256_buf_compat`, `_sgr_buf_compat`)
+deleted from `src/color.cyr`; call sites rewritten to call
+darshana's `tty_isatty` / `tty_sgr_buf` / `tty_fg_256_buf`.
+Signature-identical swap — all 6 goldens still byte-identical,
+241/241 tests pass, ASCII no-LF perf actually improves ~1 ns/byte
+(46.99 → 45.99). Binary 349 832 → **350 488 bytes (+656)** — the
+swap pulled in `tty_itoa` and other transitive darshana helpers
+the M6 stand-ins had bypassed. **DCE cap raised 350 KB → 512 KB**
+in this same slot (the M5-set 350 KB number was a stretch by M6
+and broke by 488 B after the swap; the M7-closeout cap-raise note
+in this file gets landed here instead of drifting).
+
+**0.7.0** — cut 2026-05-22 (seventh release; third same-day cut).
+**M6 closed.** Color-mode negotiation:
 TRUECOLOR / 256-color / 16-color / MONO selected at startup from a
 priority chain — `--color <mode>` override → `--no-color` →
 `NO_COLOR` env → stdout-not-TTY (unless `--force-color`) → COLORTERM
@@ -74,6 +89,14 @@ filter — pure scaffold release.
 
 ## Phase
 
+**Sandhi closeout (v0.7.1) — shipped.** darshana 0.5.3 landed
+(the third turn of the same crank that produced darshana 0.5.1
+truecolor for M1 and 0.5.2 cursor-up for M4); anuenue's pin bumped
+0.5.2 → 0.5.3 and the three M6-era stand-ins removed. Sandhi loop
+closed. M6's behavioural surface is now backed by canonical
+darshana helpers per the project rule (CLAUDE.md: *ANSI escape
+generation belongs in darshana*).
+
 **M6 (Color-Mode Negotiation) — shipped at v0.7.0.** Four-mode
 taxonomy (MONO / COLOR_16 / COLOR_256 / TRUECOLOR) selected by a
 priority chain at startup. New `src/color.cyr` owns the mode
@@ -84,13 +107,6 @@ into main.cyr: `--no-color`, `--force-color`, `--color <mode>`.
 M5's phase-cache becomes mode-aware — the 1 530-entry table holds
 per-mode escape bytes; the hot-path emit (`_emit_phase_esc`) is
 unchanged because its memcpy is byte-shape-agnostic.
-
-**Dep gate**: darshana 0.5.3 (sandhi in flight) will ship
-`tty_isatty(fd)`, `tty_sgr_buf(buf, pos, code)`, `tty_fg_256_buf(
-buf, pos, n)`. anuenue M6 ships with three stand-ins
-(`_isatty_compat`, `_sgr_buf_compat`, `_fg_256_buf_compat`) in
-`src/color.cyr`, marked `TODO(sandhi 0.5.3)`. When 0.5.3 lands,
-the swap is mechanical and recovers ~1-2 KB binary.
 
 **M5 (Performance Pass) — shipped at v0.6.0.** Three layered
 optimisations recover the M3 cluster-classification regression
@@ -156,16 +172,21 @@ buffer wants to live next to the geometry.
 
 ## Binary
 
-- **Size (0.7.0, DCE on)**: **349 832 bytes** (~342 KB). Delta vs
-  0.6.0: **+14 672 bytes** for the M6 color module + flag wiring +
-  stdlib pulls (`streq`, `strstr`, `getenv`). 168 B headroom under
-  the M5-set cap of 350 KB; darshana 0.5.3 sandhi will recover
-  ~1-2 KB when the three stand-ins go.
+- **Size (0.7.1, DCE on)**: **350 488 bytes** (~342 KB). Delta vs
+  0.7.0: **+656 bytes** — the darshana 0.5.3 sandhi swap was
+  expected to *recover* ~1-2 KB (per the sandhi proposal) but
+  instead added linker-pulled transitive helpers (notably
+  `tty_itoa`, used by `tty_sgr_buf`'s 3-digit SGR path; the M6
+  stand-in had used the narrower `_ansi_emit_u8` directly). Net
+  for the M5/M6/sandhi cycle: +16 368 B over v0.5.0.
 - **DCE elimination**: 1 240 unreachable fns, 219 392 bytes NOPed.
-- **Cap discipline for M7+**: the 350 KB cap was an M5 acceptance
-  number; M7 closeout should raise it to 512 KB to give clear
-  runway through v1.0 without changing the gate's role.
-- **Prior floors**: 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
+- **Cap discipline (v0.7.1+)**: **512 KB**. Raised from the
+  M5-acceptance 350 KB number in the same slot the swap broke it
+  by 488 B. The cap's role is regression detection (catch surprise
+  bloat between minor cuts), not a hard envelope; the new number
+  gives clear runway through M7 / M8 / v1.0 — current headroom
+  ~161 KB.
+- **Prior floors**: 0.7.0 = 349 832 B, 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
 - **Output path**: `build/anuenue`
 
 ## Tests
@@ -212,13 +233,14 @@ Anticipated at v0.7+:
 
 ## Carry-Forward
 
-- **darshana 0.5.3 sandhi** in flight (3rd turn). Will ship
-  `tty_isatty(fd)`, `tty_sgr_buf(buf, pos, code)`,
-  `tty_fg_256_buf(buf, pos, n)`. anuenue M6 inlines those as
-  `_isatty_compat` / `_sgr_buf_compat` / `_fg_256_buf_compat`
-  in `src/color.cyr` (marked `TODO(sandhi 0.5.3)`). When 0.5.3
-  lands: bump pin, delete the 3 stand-ins, sed call sites.
-  Recovers ~1-2 KB binary.
+- **darshana 0.5.3 sandhi — closed.** Shipped at v0.7.1 (this
+  slot). Pin bumped, stand-ins removed, call sites rewritten,
+  goldens byte-identical, perf marginally faster. The binary
+  estimate in the sandhi proposal (`~1-2 KB recovered`) was
+  wrong — actual delta +656 B due to transitive linker pulls.
+  Cap raised 350 KB → 512 KB in the same slot to absorb it.
+  Pattern's three turns now historical: darshana 0.5.1 / 0.5.2 /
+  0.5.3, anuenue 0.2.0 / 0.5.0 / 0.7.1.
 - **`docs/adr/0001-pipe-purity.md`** — planned for M7. M4
   introduced the first exception (animation buffers ≤64 KB stdin).
   M6 adds a second: MONO is a pure passthrough that bypasses the

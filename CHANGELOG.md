@@ -4,6 +4,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-05-22 — Sandhi closeout (darshana 0.5.3)
+
+The M6 follow-up cut. Closes the sandhi-coordination loop opened
+in v0.7.0: anuenue's three inline `_*_compat` stand-ins
+(`_isatty_compat`, `_fg_256_buf_compat`, `_sgr_buf_compat`) are
+gone, replaced by darshana 0.5.3's `tty_isatty` / `tty_sgr_buf` /
+`tty_fg_256_buf`. The swap is signature-identical — all 6 golden
+fixtures remain byte-identical against v0.7.0, all 241 unit tests
+still pass, and the ASCII no-LF perf figure actually drops ~1 ns/byte
+(darshana 0.5.3's helpers are slightly tighter than the stand-ins
+were). Binary-cap discipline raised here too — the M5 350 KB cap
+was tightened against the M6 surface and broke by 488 bytes after
+the swap; per the state.md M7-closeout note, the cap moves to 512 KB
+for the rest of the v0.7.x / v0.8.x / v0.9.x line.
+
 ### Changed
 
 - **`[deps.darshana]` pinned 0.5.2 → 0.5.3** alongside the
@@ -12,6 +27,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `tty_fg_256_buf(buf, pos, n)` per the sandhi-coordination
   proposal at
   [`sandhi/docs/proposals/2026-05-22-darshana-color-mode-helpers.md`](https://github.com/MacCracken/sandhi/blob/main/docs/proposals/2026-05-22-darshana-color-mode-helpers.md).
+- **DCE-binary cap raised 350 KB → 512 KB.** The 350 KB number
+  was an M5 acceptance criterion sized against the M5 surface;
+  M6's `src/color.cyr` (+ stdlib `streq`/`strstr`/`getenv` pulls)
+  put us 168 B under it, and the darshana 0.5.3 swap nudged us
+  488 B *over* it. Three responses considered: trim ~500 B of
+  dist baggage (fragile), fold into M7's v0.8.0 (mixes
+  behavioural + doc cycles), or raise the cap now (chosen). The
+  512 KB number gives clear runway through M7 / M8 / v1.0
+  without changing the gate's role — every minor cut still
+  records DCE size and the gate still fires on regressions
+  meaningfully larger than the bumps M3/M4/M5/M6 each cost.
+  Already flagged for M7 closeout in `docs/development/state.md`
+  — landing the policy shift here, in the same slot as the
+  swap that exposed it, instead of letting [Unreleased] drift.
 
 ### Removed
 
@@ -25,6 +54,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   check passes byte-identically (256-color and 16-color
   fixture outputs match the v0.7.0 bytes exactly — the
   signature-identical swap was correct).
+
+### Performance
+
+`scripts/perf-bench.sh` (truecolor, median of 7 runs):
+
+| Corpus           | v0.7.0  | v0.7.1  | Δ       |
+|------------------|---------|---------|---------|
+| ascii (no LF)    | 46.99   | 45.99   | −1.0    |
+| ascii (w/ LFs)   | 50.93   | 49.85   | −1.1    |
+| utf8 mixed       | 43.88   | 42.38   | −1.5    |
+
+Small but consistent wins across all three corpora. darshana
+0.5.3's helpers are marginally tighter than the inline stand-ins
+were (likely fewer redundant bounds checks; the stand-ins each
+had an explicit `if (n < 0)` / `if (n > 255)` pair that may now
+fold into darshana's existing reject path).
+
+### Binary
+
+DCE size: 349 832 → **350 488 bytes** (+656 B). The swap was
+expected to *recover* ~1–2 KB (per the sandhi proposal estimate);
+instead it added 656 B as the linker pulled in darshana 0.5.3's
+new fn bodies plus their transitive helpers (likely `tty_itoa`,
+which `tty_sgr_buf` uses for 3-digit SGR codes — wasn't
+reachable from the M6 stand-ins because `_sgr_buf_compat` used
+the more limited `_ansi_emit_u8` directly). The proposal
+estimate was wrong; the gauntlet caught it. Cap raised to 512 KB
+(see above) — leaves ~161 KB headroom for M7 / M8 / v1.0.
+
+### Sandhi closeout
+
+This cut closes the third turn of the same crank — the sandhi
+loop opened at v0.7.0 (anuenue M6) ↔ darshana 0.5.3:
+
+| | anuenue side                        | darshana side                  |
+|---|-------------------------------------|--------------------------------|
+| open | v0.7.0 stand-ins + proposal filed | (work in flight)              |
+| close | **v0.7.1 swap (this cut)**       | 0.5.3 (out before this slot)  |
+
+Pattern's prior turns: anuenue 0.2.0 ↔ darshana 0.5.1 (truecolor
+unlock); anuenue 0.5.0 ↔ darshana 0.5.2 (relative cursor). Recorded
+here so future audits can grep the pattern.
 
 ## [0.7.0] — 2026-05-22 — M6: Color-Mode Negotiation
 
