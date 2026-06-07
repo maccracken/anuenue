@@ -328,6 +328,7 @@ fn _render_frame(buf, ctab, n_clusters, phase_base, line_buf, input_ends_with_lf
 # the process normally, just without the explicit cursor-restore
 # tidy-up.
 fn _open_exit_signalfd(): i64 {
+    #ifndef CYRIUS_TARGET_AGNOS
     var mask[8];
     var i = 0;
     while (i < 8) { store8(&mask + i, 0); i = i + 1; }
@@ -336,6 +337,12 @@ fn _open_exit_signalfd(): i64 {
     # letting them kill us.
     if (sys_sigprocmask(0, &mask, 0) < 0) { return 0 - 1; }
     return sys_signalfd(0 - 1, &mask, ANUENUE_SFD_NONBLOCK);
+    #endif
+    # agnos: no terminal-signal generation yet (no Ctrl-C → SIGINT), so the
+    # signalfd exit-cleanup is a no-op — return -1, the function's documented
+    # "fall back to plain exit" contract. Also sidesteps darshana's
+    # Linux-gated TTY_SIGMASK_EXIT (universal constant, Linux-only consumers there).
+    return 0 - 1;
 }
 
 # Non-blocking probe: 1 if any exit signal is pending on `sigfd`,

@@ -158,7 +158,13 @@ fn anuenue_detect_color_mode(no_color_flag, force_color, override): i64 {
     # 4. stdout not a TTY (and not --force-color) → MONO so
     #    `anuenue > file` produces clean text.
     if (force_color == 0) {
+        #ifndef CYRIUS_TARGET_AGNOS
         if (tty_isatty(STDOUT) == 0) { return ANUENUE_COLOR_MONO; }
+        #endif
+        # agnos: no isatty/ioctl (tty_isatty is darshana Linux-only), and output
+        # is the FB console (color wanted) with no shell `> file` redirection yet —
+        # so don't force MONO here; fall through to the TERM heuristics (→ 16-color
+        # default on agnos, where getenv returns 0).
     }
     # 5. COLORTERM signals truecolor support explicitly.
     var ct = getenv("COLORTERM");

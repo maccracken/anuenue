@@ -4,6 +4,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-06-07
+
+**Builds for AGNOS (`--agnos`).** anuenue now compiles for the sovereign target and runs as a static ELF64 on the agnos kernel (staged on the agnos-fs `/bin` alongside agnsh/cmdrs/bnrmr/klug). Pairs with the agnos 1.43.1 FB-console ANSI/SGR interpreter — the kernel framebuffer now renders the per-character 256-colour rainbow anuenue emits (screendump-confirmed). The v1.x public API contract (flags / exit codes / output shape) is unchanged; this is a portability minor, same lane as commandress 1.1.0 / bannermanor 1.1.0.
+
+### Changed
+
+- **Cyrius pin `6.0.1` → `6.0.56`** (`cyrius.cyml`) — the toolchain that carries `CYRIUS_TARGET_AGNOS` (landed cyrius 6.0.55); `./lib/` re-vendored at the new pin. Linux/host build unaffected.
+
+### Added
+
+- **Two `#ifdef CYRIUS_TARGET_AGNOS` gates** for the agnos exec/TTY surface (host behaviour untouched):
+  - `_open_exit_signalfd` (`src/animate.cyr`) returns `-1` on agnos — no terminal-signal generation yet (no Ctrl-C → SIGINT), so the signalfd exit-cleanup is a no-op (the function's documented fall-back); also sidesteps darshana's Linux-gated `TTY_SIGMASK_EXIT`.
+  - the `tty_isatty` colour-autodetect (`src/color.cyr`) is skipped on agnos (no `isatty`/`ioctl`); output is the FB console with no `> file` redirection yet, so colour is left on (falls through to the 16-colour default).
+
+### Notes
+
+- On agnos, anuenue reads the keyboard (fd 0) — no pipes / argv-passing yet — so it rainbow-tints typed lines live but has no EOF to exit cleanly (reboot to leave). File-arg + pipe support follow the agnos userland-env arc (envp/execwait argv).
+
 ## [1.0.0] — 2026-05-22
 
 **GA.** anuenue v1.0.0 — the Cyrius-native rainbow pipe filter,
