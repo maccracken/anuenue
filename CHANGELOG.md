@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-06-07
+
+**Positional-text mode — usable on AGNOS today.** `anuenue TEXT...` now rainbow-tints its argv (joined by spaces, one trailing newline) and exits, instead of only ever reading stdin. This closes the 1.1.0 "no argv-passing yet — has no EOF to exit cleanly (reboot to leave)" gap: agnos has no shell pipes and no stdin EOF, so the pure pipe filter could never terminate there. Passing text as arguments mirrors `bnrmr TEXT` — `run /bin/anuenue AGNOS` is now a one-shot rainbow. The stdin pipe filter stays the canonical use on a real TTY pipeline; positional args are additive. The v1.x public API contract (flags / exit codes / output shape) is unchanged.
+
+### Added
+
+- **`anuenue TEXT...` positional-text mode** (`src/main.cyr` `anuenue_text_args`, `src/filter.cyr` `anuenue_render_bytes`). Any non-flag argument routes to a one-shot render of the joined args + newline; zero args keeps the existing stdin filter. Checked before the MONO short-circuit, so `--no-color anuenue TEXT` writes plain bytes without ever touching stdin. `anuenue_render_bytes` reuses the filter's exact cluster-coloring rules (per-cluster fg escape, ZWJ/RI grapheme folding, phase advance per non-extending cluster) with no chunk-carry, since the whole buffer is in memory.
+- Help text + examples updated with the `anuenue [OPTIONS] TEXT...` usage line.
+
+### Notes
+
+- Pairs with the agnos-side line-discipline EOF (Ctrl-D) added the same day: `read(fd 0)` now returns 0 on Ctrl-D, so the stdin filter path can also terminate on agnos for interactive use. Positional-text mode remains the ergonomic one-shot path (no pipes there yet).
+
 ## [1.1.0] — 2026-06-07
 
 **Builds for AGNOS (`--agnos`).** anuenue now compiles for the sovereign target and runs as a static ELF64 on the agnos kernel (staged on the agnos-fs `/bin` alongside agnsh/cmdrs/bnrmr/klug). Pairs with the agnos 1.43.1 FB-console ANSI/SGR interpreter — the kernel framebuffer now renders the per-character 256-colour rainbow anuenue emits (screendump-confirmed). The v1.x public API contract (flags / exit codes / output shape) is unchanged; this is a portability minor, same lane as commandress 1.1.0 / bannermanor 1.1.0.
