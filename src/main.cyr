@@ -65,10 +65,12 @@ fn _eprint(s): i64 {
 # (pipe-purity holds — help text exits before the filter starts).
 fn print_usage(fs): i64 {
     _eprint("anuenue — ānuenue (Hawaiian: rainbow). Stdin → stdout rainbow pipe filter.\n\n");
-    _eprint("Usage:\n  ... | anuenue [OPTIONS]\n\n");
+    _eprint("Usage:\n  ... | anuenue [OPTIONS]          # pipe filter (TTY pipelines)\n");
+    _eprint("  anuenue [OPTIONS] TEXT...          # one-shot: rainbow TEXT and exit\n\n");
     _eprint("Options:\n");
     flags_print_help(fs);
     _eprint("\nExamples:\n");
+    _eprint("  anuenue AGNOS                                # one-shot rainbow (no pipe needed)\n");
     _eprint("  echo \"AGNOS\" | anuenue                       # one-shot rainbow tint\n");
     _eprint("  iam | anuenue -p 3                           # tighter rainbow (MOTD pipeline)\n");
     _eprint("  bnrmr \"AGNOS\" | anuenue -s 42                # deterministic seed\n");
@@ -95,6 +97,52 @@ fn build_argv_array(arr): i64 {
         i = i + 1;
     }
     return ac;
+}
+
+# ---- anuenue_text_args — positional-text mode (agnos-friendly) ----
+#
+# Joins the `npos` positional args with single spaces, appends one
+# trailing newline, and rainbow-renders the result (or, under MONO —
+# --no-color / NO_COLOR / --color=none — writes the plain bytes). This
+# is the `run /bin/anuenue AGNOS` path: agnos has no shell pipes and
+# no stdin EOF, so the stdin filter loop can never terminate there.
+# Passing text as argv mirrors `bnrmr TEXT` and makes anuenue one-shot
+# usable. On a normal TTY pipeline the stdin filter stays canonical;
+# positional args are an additive convenience, not a replacement.
+fn anuenue_text_args(fs, npos): i64 {
+    var total = 0;
+    var i = 0;
+    while (i < npos) {
+        total = total + strlen(flags_positional(fs, i));
+        i = i + 1;
+    }
+    total = total + (npos - 1) + 1;         # (npos-1) space separators + 1 LF
+
+    var buf = alloc(total);
+    if (buf == 0) { return ANUENUE_EXIT_RUN; }
+
+    var pos = 0;
+    i = 0;
+    while (i < npos) {
+        if (i > 0) { store8(buf + pos, 32); pos = pos + 1; }   # space separator
+        var s  = flags_positional(fs, i);
+        var sl = strlen(s);
+        var k  = 0;
+        while (k < sl) {
+            store8(buf + pos, load8(s + k));
+            pos = pos + 1;
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    store8(buf + pos, 10);                   # trailing newline
+    pos = pos + 1;
+
+    if (ANUENUE_COLOR_MODE == ANUENUE_COLOR_MONO) {
+        file_write(STDOUT, buf, pos);
+        return ANUENUE_EXIT_OK;
+    }
+    return anuenue_render_bytes(buf, pos);
 }
 
 fn main(): i64 {
@@ -170,6 +218,17 @@ fn main(): i64 {
         flags_get_bool(fs, f_no_color),
         flags_get_bool(fs, f_force_color),
         color_override);
+
+    # Positional-text mode: any non-flag args → rainbow that text and
+    # exit, never touching stdin. This is the `run /bin/anuenue AGNOS`
+    # path (agnos has no pipes / no stdin EOF, so the filter loop can't
+    # terminate there). Checked BEFORE the MONO short-circuit so
+    # `--no-color anuenue TEXT` writes plain text instead of falling
+    # into anuenue_passthrough()'s stdin read.
+    var npos = flags_positional_count(fs);
+    if (npos > 0) {
+        return anuenue_text_args(fs, npos);
+    }
 
     # MONO short-circuits everything (incl. -a). Acceptance:
     # `NO_COLOR=1 echo X | anuenue` byte-identical to `echo X`.
