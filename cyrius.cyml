@@ -5,7 +5,7 @@ description = "anuenue — ānuenue (Hawaiian: rainbow). Stdin → stdout rainbo
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/anuenue"
 language = "cyrius"
-cyrius = "6.0.56"
+cyrius = "6.1.14"
 
 [build]
 entry = "src/main.cyr"

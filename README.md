@@ -19,7 +19,8 @@ cyrius fuzz                                  # five harnesses, ~1.35M assertions
 ## Usage
 
 ```sh
-echo "AGNOS" | ./build/anuenue                 # one-shot rainbow tint
+./build/anuenue AGNOS                          # positional-text: rainbow argv + exit (no pipe; agnos-friendly)
+echo "AGNOS" | ./build/anuenue                 # one-shot rainbow tint (pipe filter)
 echo "AGNOS" | ./build/anuenue -s 100          # deterministic seed (testing / scripts)
 echo "AGNOS" | ./build/anuenue -p 13           # bigger phase step per character
 echo "日本AGNOS" | ./build/anuenue             # UTF-8 grapheme-aware (one phase per glyph)
@@ -29,7 +30,7 @@ cat poem.txt | ./build/anuenue -a              # animated (-d <s> / -S <speed>)
 NO_COLOR=1 echo "AGNOS" | ./build/anuenue      # byte-identical passthrough
 ./build/anuenue --color=256                    # quantize to xterm 256-cube
 ./build/anuenue --force-color | tee motd.ansi  # keep colour through a non-TTY pipe
-./build/anuenue --version                      # anuenue 1.0.0
+./build/anuenue --version                      # anuenue 1.1.1
 ./build/anuenue --help                         # full flag surface
 ```
 

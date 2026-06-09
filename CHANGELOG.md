@@ -4,6 +4,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-06-08 (agnos argv fix)
+
+### Changed
+
+- cyrius toolchain pin 6.0.56 → 6.1.14.
+
+### Fixed
+
+- **agnos: `anuenue TEXT` positional args weren't seen.** Call `main` from a bare top-level statement (`_agnos_entry();`) instead of `var r = main();`. The latter runs `main` as a module-global initializer, *before* cyrius's init-stack capture, so `argc()`/`argv()` read 0/null. cyrius issue: agnos argv init-rsp capture.
+
 ## [1.1.1] — 2026-06-07
 
 **Positional-text mode — usable on AGNOS today.** `anuenue TEXT...` now rainbow-tints its argv (joined by spaces, one trailing newline) and exits, instead of only ever reading stdin. This closes the 1.1.0 "no argv-passing yet — has no EOF to exit cleanly (reboot to leave)" gap: agnos has no shell pipes and no stdin EOF, so the pure pipe filter could never terminate there. Passing text as arguments mirrors `bnrmr TEXT` — `run /bin/anuenue AGNOS` is now a one-shot rainbow. The stdin pipe filter stays the canonical use on a real TTY pipeline; positional args are additive. The v1.x public API contract (flags / exit codes / output shape) is unchanged.

@@ -12,7 +12,7 @@
 
 - **Type**: Binary (pure pipe filter — composes into any shell pipeline)
 - **License**: GPL-3.0-only
-- **Language**: Cyrius (toolchain pinned in `cyrius.cyml [package].cyrius`, currently `6.0.1`)
+- **Language**: Cyrius (toolchain pinned in `cyrius.cyml [package].cyrius`, currently `6.0.56`)
 - **Version**: `VERSION` at the project root is the source of truth — do not inline the number here
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
 - **Family**: founder of the **pipe-decorator family** (stdin → stdout aesthetic / transform filters) — see [shared-crates.md § Pipe-decorator family](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/shared-crates.md)
