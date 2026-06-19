@@ -4,6 +4,61 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.3] — 2026-06-19 (toolchain + dep refresh)
+
+Maintenance cut — toolchain pin advance plus the first-party-dep
+sandhi refresh that had accumulated since v1.0.0. No behavioural
+changes: all six golden fixtures stay byte-identical, the three
+MONO equivalence checks hold, animation smoke (truecolor / 256 /
+16 / long-cluster) passes, and perf is unchanged within host noise
+(ASCII no-LF **46.59 ns/byte**, under the 60 ns/byte M5 cap). The
+v1.x public API contract (flags / exit codes / output shape /
+capability surface) is unchanged.
+
+### Changed
+
+- **Cyrius pin `6.1.14` → `6.2.24`** (`cyrius.cyml [package].cyrius`).
+  `./lib/` re-synced to the new pin via `cyrius lib sync` (98 stdlib
+  files updated).
+- **`[deps.darshana]` `0.5.3` → `0.7.1`.** ANSI escape primitives.
+  Filter + animation output byte-identical against the prior pin —
+  the helpers anuenue calls (`tty_fg_rgb_buf`, `tty_sgr_reset_buf`,
+  `tty_isatty`, `tty_sgr_buf`, `tty_fg_256_buf`, `tty_cursor_up`,
+  cursor hide/show) are unchanged in shape.
+- **`[deps.sakshi]` `2.2.5` → `2.4.0`.** Errors / tracing. Standard
+  wiring; unreachable surface DCE-eliminated.
+- **`[deps.agnostik]` `1.2.2` → `1.3.1`.** Shared Result / Error
+  shapes. Standard wiring; unreachable surface DCE-eliminated.
+
+### Fixed
+
+- **`tests/anuenue.bcyr` missing `include "src/color.cyr"`.** The
+  benchmark unit included `hsv.cyr` + `filter.cyr` but not
+  `color.cyr`, so `filter.cyr`'s `ANUENUE_COLOR_MODE` reference
+  resolved to nothing. cyrius 6.1.14 tolerated the dangling
+  reference; 6.2.24 is stricter and errored
+  (`undefined variable 'ANUENUE_COLOR_MODE'`). Added the include
+  before `filter.cyr`, mirroring the test unit's include order.
+  Latent since M6 (v0.7.0) added the color-mode dependency to the
+  filter hot path; surfaced by the toolchain bump.
+
+### Binary
+
+- DCE size: 351 200 → **394 440 bytes** (+43 240 B) — the new
+  toolchain + the three dep bumps. Still ~115 KB under the 512 KB
+  cap; the gate's regression-detection role is intact.
+
+### Notes
+
+- `cyrius build`/`bench` now emit two `duplicate symbol`
+  warnings from `lib/agnostik.cyr` (`ERR_TIMEOUT`, `ERR_UNKNOWN`,
+  "last definition wins") plus several `undefined function`
+  warnings for unreachable sakshi/agnostik surface (`map_new`,
+  `tagged_new`, `trait_call0`, …). All are upstream-dep artifacts
+  on unreachable code that DCE eliminates; anuenue's output and
+  capability surface are unaffected. Not anuenue's to fix —
+  flagged here for the next dep audit.
+
 ## [1.1.2] — 2026-06-08 (agnos argv fix)
 
 ### Changed

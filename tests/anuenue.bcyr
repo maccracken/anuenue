@@ -22,6 +22,7 @@
 # Stdlib + darshana + the filter source auto-included via cyrius.cyml.
 
 include "src/hsv.cyr"
+include "src/color.cyr"
 include "src/filter.cyr"
 
 # 1M iterations for hsv_rainbow — sub-100ns per call expected, so a

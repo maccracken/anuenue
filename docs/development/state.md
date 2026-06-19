@@ -5,6 +5,23 @@
 
 ## Version
 
+**1.1.3** — cut 2026-06-19. **Toolchain + dep refresh.**
+Maintenance cut: cyrius pin `6.1.14` → `6.2.24` (`./lib/` re-synced
+via `cyrius lib sync`, 98 stdlib files) plus the first-party-dep
+sandhi refresh accumulated since GA — darshana `0.5.3` → `0.7.1`,
+sakshi `2.2.5` → `2.4.0`, agnostik `1.2.2` → `1.3.1`. No
+behavioural change: all six goldens byte-identical, three MONO
+equivalence checks hold, animate-smoke (truecolor / 256 / 16 /
+long-cluster) green, perf unchanged within noise (ASCII no-LF
+**46.59 ns/byte**, under the 60 ns/byte M5 cap). One latent bug
+surfaced by the stricter 6.2.24 front-end and fixed in-cut:
+`tests/anuenue.bcyr` was missing `include "src/color.cyr"`, so
+`filter.cyr`'s `ANUENUE_COLOR_MODE` reference dangled (tolerated
+by 6.1.14, errored by 6.2.24); include added before `filter.cyr`.
+DCE binary 351 200 → **394 440 B (+43 240)** — the toolchain + dep
+bumps; ~115 KB headroom under the 512 KB cap. 245/245 unit
+assertions pass; v1.x API contract unchanged.
+
 **1.0.0** — **GA.** Tagged 2026-05-22 on user signal — the
 eleventh release, two calendar days after the `cyrius init anuenue`
 scaffold. The public API contract (flag set, exit codes, capability
@@ -270,8 +287,8 @@ in for a minor-cycle soak window. Tagged on user signal per
 
 ## Toolchain
 
-- **Cyrius pin**: `6.0.1` (in `cyrius.cyml [package].cyrius`).
-- Pin-lag spectrum: aligned with darshana 0.5.2 / sakshi 2.2.5 / agnostik 1.2.2 — all on 6.0.1 since scaffold. Re-evaluate at each minor cut; sandhi-bump if a dep ships a 6.0.x+ upgrade we want.
+- **Cyrius pin**: `6.2.24` (in `cyrius.cyml [package].cyrius`). History: `6.0.1` (scaffold → v1.0.0) → `6.0.56` (v1.1.0, agnos target) → `6.1.14` (v1.1.2) → `6.2.24` (v1.1.3). `./lib/` re-synced to the pin via `cyrius lib sync` at each bump.
+- Pin-lag spectrum: aligned with darshana 0.7.1 / sakshi 2.4.0 / agnostik 1.3.1 as of v1.1.3. Re-evaluate at each minor cut; sandhi-bump if a dep ships an upgrade we want.
 
 ## Source
 
@@ -294,17 +311,18 @@ registry, post-v1.x).
 
 ## Binary
 
-- **Size (1.0.0, DCE on)**: **351 200 bytes** (~343 KB). Delta vs
-  0.9.0: **±0 bytes** — v1.0.0 is a symbolic GA crystallisation
-  of v0.9.0's surface, no binary changes. Delta vs 0.8.0: also
-  ±0 (the quality slot at v0.9.0 didn't touch the production
-  binary either).
-- **DCE elimination**: 1 240 unreachable fns, 219 668 bytes NOPed.
+- **Size (1.1.3, DCE on)**: **394 440 bytes** (~385 KB). Delta vs
+  v1.0.0 floor: **+43 240 B** — the cyrius `6.1.14` → `6.2.24`
+  toolchain bump plus the darshana 0.5.3 → 0.7.1 / sakshi 2.2.5 →
+  2.4.0 / agnostik 1.2.2 → 1.3.1 dep refresh (larger dep dist
+  surface; unreachable parts DCE-eliminated). No anuenue source
+  change drove it.
+- **DCE elimination**: 1 268 unreachable fns, 223 222 bytes NOPed.
 - **Cap discipline (v1.0.0+)**: **512 KB**. The cap's role
   remains regression detection — minor cuts within v1.x must
   record DCE size and re-check the cap fires meaningfully.
-  Current headroom ~161 KB.
-- **Prior floors**: 0.9.0 = 351 200 B, 0.8.0 = 351 200 B, 0.7.1 = 350 488 B, 0.7.0 = 349 832 B, 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
+  Current headroom ~118 KB.
+- **Prior floors**: 1.0.0 = 351 200 B, 0.9.0 = 351 200 B, 0.8.0 = 351 200 B, 0.7.1 = 350 488 B, 0.7.0 = 349 832 B, 0.6.0 = 335 160 B, 0.5.0 = 334 120 B, 0.4.0 = 322 368 B, 0.3.0 = 317 216 B, 0.2.0 = 304 368 B.
 - **Output path**: `build/anuenue`
 
 ## Tests
@@ -326,9 +344,9 @@ Direct (declared in `cyrius.cyml`):
 
 | Dep | Tag | Role | Status |
 |-----|-----|------|--------|
-| `darshana` | 0.5.3 | ANSI color escape generation. Pin history: 0.5.1 (M1 truecolor `tty_fg_rgb_buf` / `tty_sgr_reset_buf`); 0.5.2 (M4 `tty_cursor_up(n)` / `tty_cursor_down(n)`); 0.5.3 (M6 sandhi closeout — `tty_isatty(fd)` / `tty_sgr_buf` / `tty_fg_256_buf`, replacing anuenue's M6-era stand-ins). | Live. Filter path uses `tty_fg_rgb_buf` + `tty_sgr_reset_buf`; animation path additionally uses `tty_cursor_up`, `tty_cursor_hide`, `tty_cursor_show`, `tty_sgr_reset`. |
-| `sakshi` | 2.2.5 | Errors / tracing / structured logging | Standard wiring per first-party-standards |
-| `agnostik` | 1.2.2 | Shared Result / Error shapes | Standard wiring |
+| `darshana` | 0.7.1 | ANSI color escape generation. Pin history: 0.5.1 (M1 truecolor `tty_fg_rgb_buf` / `tty_sgr_reset_buf`); 0.5.2 (M4 `tty_cursor_up(n)` / `tty_cursor_down(n)`); 0.5.3 (M6 sandhi closeout — `tty_isatty(fd)` / `tty_sgr_buf` / `tty_fg_256_buf`); 0.7.1 (v1.1.3 refresh — output byte-identical, no API shape change in the helpers anuenue calls). | Live. Filter path uses `tty_fg_rgb_buf` + `tty_sgr_reset_buf`; animation path additionally uses `tty_cursor_up`, `tty_cursor_hide`, `tty_cursor_show`, `tty_sgr_reset`. |
+| `sakshi` | 2.4.0 | Errors / tracing / structured logging | Standard wiring per first-party-standards. Bumped 2.2.5 → 2.4.0 at v1.1.3; unreachable surface DCE-eliminated. |
+| `agnostik` | 1.3.1 | Shared Result / Error shapes | Standard wiring. Bumped 1.2.2 → 1.3.1 at v1.1.3; ships two benign `duplicate symbol` warnings (`ERR_TIMEOUT` / `ERR_UNKNOWN`, "last definition wins") on unreachable code. |
 | Cyrius stdlib | n/a | string, fmt, alloc, io, vec, str, syscalls, assert, bench, args, flags, **chrono (M4)** | Auto-resolved via `cyrius deps`. `args` + `flags` added at M2; `chrono` added at M4 for frame timing (`sleep_ms`) and deadline math (`clock_now_ns`). |
 
 No pre-release / pre-1.0 deps on the critical path. No external (non-AGNOS) deps.

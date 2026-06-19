@@ -5,7 +5,7 @@ description = "anuenue — ānuenue (Hawaiian: rainbow). Stdin → stdout rainbo
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/anuenue"
 language = "cyrius"
-cyrius = "6.1.14"
+cyrius = "6.2.24"
 
 [build]
 entry = "src/main.cyr"
@@ -28,17 +28,17 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "b
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
 path = "../darshana"
-tag = "0.5.3"
+tag = "0.7.1"
 modules = ["dist/darshana.cyr"]
 
 [deps.sakshi]
 git = "https://github.com/MacCracken/sakshi.git"
 path = "../sakshi"
-tag = "2.2.5"
+tag = "2.4.0"
 modules = ["dist/sakshi.cyr"]
 
 [deps.agnostik]
 git = "https://github.com/MacCracken/agnostik.git"
 path = "../agnostik"
-tag = "1.2.2"
+tag = "1.3.1"
 modules = ["dist/agnostik.cyr"]
