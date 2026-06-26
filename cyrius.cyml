@@ -13,12 +13,22 @@ test = "src/test.cyr"
 output = "build/anuenue"
 
 [deps]
-# v0.3.0 (M2 — Flag Surface) added "args" + "flags" — the AGNOS-
-# canonical argv + getopt-long-shaped flag parser used by every
-# toolchain binary (cyrius, ark, cyrld, cyrfmt) and consumer
-# (cyim, chakshu, bannermanor). Not a sibling-dep introduction —
-# both live in the cyrius stdlib.
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "flags", "chrono"]
+# "args" — AGNOS-canonical argv. The stdlib "flags" parser was DROPPED when CLI
+# parsing moved to the [deps.cmdit] distlib: cmdit IS that parser productized +
+# extended, and anuenue is its second worked migration (after kii). "args" stays
+# (cmdit_argv/cmdit_parse call args_init/argc/argv); "io" stays (cmdit_parse
+# references getenv via cmdit_finalize).
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "chrono"]
+
+# CLI / argument parsing — cmdit (the sovereign getopt-long lib; the stdlib flags
+# parser productized + extended). Local sibling path + pinned tag, per AGNOS
+# dep-lockin discipline. cmdit 1.1.0 adds cmdit_help_flags, the table-only renderer
+# anuenue's rich help (brand intro + Examples block) wraps around the flag list.
+[deps.cmdit]
+git = "https://github.com/MacCracken/cmdit.git"
+path = "../cmdit"
+tag = "1.1.0"
+modules = ["dist/cmdit.cyr"]
 
 # AGNOS first-party deps — pinned tags per `feedback_dep_lockin_sandhi_unlock`.
 # darshana provides the ANSI escape primitives anuenue emits per character.

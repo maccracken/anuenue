@@ -59,7 +59,7 @@ fn _eprint(s): i64 {
 # ---- print_usage --------------------------------------------------
 #
 # Two-step: a brand-shaped intro to fd 2 (stderr), then
-# `flags_print_help` enumerates each registered flag with its short
+# `cmdit_help_flags` enumerates each registered flag with its short
 # + long name + value type + help. Stderr per POSIX convention so
 # `anuenue --help | less` doesn't pollute the pipe-down case
 # (pipe-purity holds — help text exits before the filter starts).
@@ -68,7 +68,8 @@ fn print_usage(fs): i64 {
     _eprint("Usage:\n  ... | anuenue [OPTIONS]          # pipe filter (TTY pipelines)\n");
     _eprint("  anuenue [OPTIONS] TEXT...          # one-shot: rainbow TEXT and exit\n\n");
     _eprint("Options:\n");
-    flags_print_help(fs);
+    cmdit_help_flags(fs);                   # cmdit 1.1.0 table-only renderer — just the flag rows,
+                                            # so anuenue keeps its own intro / Usage / Examples framing
     _eprint("\nExamples:\n");
     _eprint("  anuenue AGNOS                                # one-shot rainbow (no pipe needed)\n");
     _eprint("  echo \"AGNOS\" | anuenue                       # one-shot rainbow tint\n");
@@ -82,22 +83,9 @@ fn print_usage(fs): i64 {
     return 0;
 }
 
-# Pack argc()/argv(i) into a contiguous cstr* array. flags_parse
-# wants a raw pointer-array (it does `load64(argv + i*8)`), not the
-# byte-stream walker that lib/args.cyr exposes. anuenue caps argc
-# at 256 — orders of magnitude more than any plausible invocation
-# (lolcat itself ships with 7 flags, anuenue has 5).
-var ANUENUE_ARGV_MAX = 256;
-
-fn build_argv_array(arr): i64 {
-    var ac = argc();
-    var i = 0;
-    while (i < ac) {
-        store64(arr + i * 8, argv(i));
-        i = i + 1;
-    }
-    return ac;
-}
+# The argc()/argv(i) → contiguous cstr* materialize bridge that anuenue used to
+# hand-roll (build_argv_array + the ANUENUE_ARGV_MAX cap) is now absorbed by
+# cmdit_parse (via cmdit_argv) — the boilerplate the cmdit extraction removes.
 
 # ---- anuenue_text_args — positional-text mode (agnos-friendly) ----
 #
@@ -113,7 +101,7 @@ fn anuenue_text_args(fs, npos): i64 {
     var total = 0;
     var i = 0;
     while (i < npos) {
-        total = total + strlen(flags_positional(fs, i));
+        total = total + strlen(cmdit_positional(fs, i));
         i = i + 1;
     }
     total = total + (npos - 1) + 1;         # (npos-1) space separators + 1 LF
@@ -125,7 +113,7 @@ fn anuenue_text_args(fs, npos): i64 {
     i = 0;
     while (i < npos) {
         if (i > 0) { store8(buf + pos, 32); pos = pos + 1; }   # space separator
-        var s  = flags_positional(fs, i);
+        var s  = cmdit_positional(fs, i);
         var sl = strlen(s);
         var k  = 0;
         while (k < sl) {
@@ -146,48 +134,39 @@ fn anuenue_text_args(fs, npos): i64 {
 }
 
 fn main(): i64 {
-    args_init();
     alloc_init();
 
-    var ac = argc();
-    if (ac > ANUENUE_ARGV_MAX) {
-        _eprint("anuenue: too many arguments\n");
-        return ANUENUE_EXIT_USAGE;
-    }
-    var argv_arr[2048];                     # 256 slots × 8 bytes
-    build_argv_array(&argv_arr);
+    # CLI parsing via cmdit (the [deps.cmdit] distlib). cmdit_new auto-registers
+    # --help/-h + --version/-V; cmdit_parse materializes the process argv itself
+    # (the build_argv_array bridge anuenue used to hand-roll), parses, then
+    # finalizes. Short-char codes (p/s/F/a/d/S/n/C/c) first, then long + default + help.
+    var fs = cmdit_new("anuenue");
+    var f_freq        = cmdit_int (fs, 112, "freq",        ANUENUE_PHASE_STEP, "phase step per character");
+    var f_seed        = cmdit_int (fs, 115, "seed",        0, "starting hue phase (deterministic)");
+    var f_offset      = cmdit_int (fs,  70, "offset",      0, "additive phase offset (Ruby lolcat compat)");
+    var f_animate     = cmdit_bool(fs,  97, "animate",     "animate: buffer input, scroll the rainbow");
+    var f_duration    = cmdit_int (fs, 100, "duration",    ANUENUE_DEFAULT_DURATION_S,
+                                   "animation duration in seconds (0 = until SIGINT)");
+    var f_speed       = cmdit_int (fs,  83, "speed",       ANUENUE_DEFAULT_SPEED,
+                                   "animation: phase advance per frame");
+    var f_no_color    = cmdit_bool(fs, 110, "no-color",    "disable colour (pass-through cat)");
+    var f_force_color = cmdit_bool(fs,  67, "force-color", "emit colour even when stdout isn't a TTY");
+    var f_color       = cmdit_str (fs,  99, "color",       "auto",
+                                   "color mode: auto / 24bit / 256 / 16 / none");
 
-    # Flag registrations. Short-char codes (h/V/p/s/F/a/d/S/n/C/c)
-    # in the first arg; long names + defaults + help text follow.
-    var fs = flags_new();
-    var f_help        = flags_add_bool(fs, 104, "help",        0, "show this help and exit");
-    var f_version     = flags_add_bool(fs,  86, "version",     0, "print version and exit");
-    var f_freq        = flags_add_int (fs, 112, "freq",        ANUENUE_PHASE_STEP, "phase step per character");
-    var f_seed        = flags_add_int (fs, 115, "seed",        0, "starting hue phase (deterministic)");
-    var f_offset      = flags_add_int (fs,  70, "offset",      0, "additive phase offset (Ruby lolcat compat)");
-    var f_animate     = flags_add_bool(fs,  97, "animate",     0, "animate: buffer input, scroll the rainbow");
-    var f_duration    = flags_add_int (fs, 100, "duration",    ANUENUE_DEFAULT_DURATION_S,
-                                       "animation duration in seconds (0 = until SIGINT)");
-    var f_speed       = flags_add_int (fs,  83, "speed",       ANUENUE_DEFAULT_SPEED,
-                                       "animation: phase advance per frame");
-    var f_no_color    = flags_add_bool(fs, 110, "no-color",    0, "disable colour (pass-through cat)");
-    var f_force_color = flags_add_bool(fs,  67, "force-color", 0, "emit colour even when stdout isn't a TTY");
-    var f_color       = flags_add_str (fs,  99, "color",       "auto",
-                                       "color mode: auto / 24bit / 256 / 16 / none");
-
-    if (flags_parse(fs, ac, &argv_arr) != 0) {
-        # Surface the specific error first so the user knows which
-        # token tripped the parse, then dump usage. Stderr per
-        # POSIX. Decode each FlagErr variant — flags lib stashes
-        # the variant via flags_error(fs).
-        var err = flags_error(fs);
-        if (err == FLAG_ERR_UNKNOWN) {
+    var pr = cmdit_parse(fs);
+    if (pr == CMDIT_RESULT_ERR) {
+        # Surface the specific error first so the user knows which token tripped
+        # the parse, then dump usage. Stderr per POSIX. anuenue keeps its own
+        # error wording; cmdit's taxonomy maps 1:1 onto the old FlagErr variants.
+        var err = cmdit_error(fs);
+        if (err == CMDIT_ERR_UNKNOWN) {
             _eprint("anuenue: unknown flag\n");
-        } else { if (err == FLAG_ERR_MISSING_VALUE) {
+        } else { if (err == CMDIT_ERR_MISSING_VALUE) {
             _eprint("anuenue: flag missing value\n");
-        } else { if (err == FLAG_ERR_BAD_INT) {
+        } else { if (err == CMDIT_ERR_BAD_INT) {
             _eprint("anuenue: bad integer value\n");
-        } else { if (err == FLAG_ERR_BUNDLED) {
+        } else { if (err == CMDIT_ERR_BUNDLED) {
             _eprint("anuenue: bundled short flags not supported (use -x -y, not -xy)\n");
         } else {
             _eprint("anuenue: argument parse error\n");
@@ -196,11 +175,11 @@ fn main(): i64 {
         return ANUENUE_EXIT_USAGE;
     }
 
-    if (flags_get_bool(fs, f_help) == 1) {
+    if (pr == CMDIT_HELP) {
         print_usage(fs);
         return ANUENUE_EXIT_OK;
     }
-    if (flags_get_bool(fs, f_version) == 1) {
+    if (pr == CMDIT_VERSION) {
         return print_version();
     }
 
@@ -209,14 +188,14 @@ fn main(): i64 {
     # this is unconditional — passing nothing leaves PHASE_STEP at 7
     # and PHASE_START at 0. `-s` and `-F` are additive (last wins on
     # ties is moot since both add into the same accumulator).
-    ANUENUE_PHASE_STEP  = flags_get_int(fs, f_freq);
-    ANUENUE_PHASE_START = flags_get_int(fs, f_seed) + flags_get_int(fs, f_offset);
+    ANUENUE_PHASE_STEP  = cmdit_get_int(fs, f_freq);
+    ANUENUE_PHASE_START = cmdit_get_int(fs, f_seed) + cmdit_get_int(fs, f_offset);
 
     # M6: detect colour mode from flags + env + TTY, then dispatch.
-    var color_override = _color_override_from_str(flags_get_str(fs, f_color));
+    var color_override = _color_override_from_str(cmdit_get_str(fs, f_color));
     ANUENUE_COLOR_MODE = anuenue_detect_color_mode(
-        flags_get_bool(fs, f_no_color),
-        flags_get_bool(fs, f_force_color),
+        cmdit_get_bool(fs, f_no_color),
+        cmdit_get_bool(fs, f_force_color),
         color_override);
 
     # Positional-text mode: any non-flag args → rainbow that text and
@@ -225,7 +204,7 @@ fn main(): i64 {
     # terminate there). Checked BEFORE the MONO short-circuit so
     # `--no-color anuenue TEXT` writes plain text instead of falling
     # into anuenue_passthrough()'s stdin read.
-    var npos = flags_positional_count(fs);
+    var npos = cmdit_positional_count(fs);
     if (npos > 0) {
         return anuenue_text_args(fs, npos);
     }
@@ -238,9 +217,9 @@ fn main(): i64 {
 
     # M4 dispatch: if -a is set, route to animate; otherwise the
     # M1/M2/M3 pipe-purity filter loop.
-    if (flags_get_bool(fs, f_animate) == 1) {
-        return anuenue_animate(flags_get_int(fs, f_duration),
-                               flags_get_int(fs, f_speed));
+    if (cmdit_get_bool(fs, f_animate) == 1) {
+        return anuenue_animate(cmdit_get_int(fs, f_duration),
+                               cmdit_get_int(fs, f_speed));
     }
     return anuenue_filter();
 }

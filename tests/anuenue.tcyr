@@ -150,45 +150,39 @@ fn main(): i64 {
     assert(ANUENUE_LINE_BUF > ANUENUE_FLUSH_RESERVE * 100, "LINE_BUF amortizes ≥100 chars per flush");
     assert(ANUENUE_LINE_BUF > ANUENUE_FLUSH_RESERVE, "LINE_BUF > FLUSH_RESERVE (no underflow in guard)");
 
-    # ---- v0.3.0 — M2 flag-parser coverage ---------------------------
-    # Exercises `flags_parse` over synthetic argv arrays. The
-    # parser's own contract is asserted in cyrius's own
-    # tests/flags.tcyr; here we verify anuenue's flag-set wiring:
-    # short forms, long forms, integer extraction, the additive
-    # `-s` + `-F` accumulator, the boolean -h / -V markers, and the
-    # error-variant dispatch. The end-to-end stdin/stdout path
-    # (`echo X | anuenue -s 42`) is exercised by the determinism
-    # golden in `docs/benchmarks.md` (M5 may scriptize it).
-    test_group("M2 flags — long/short bool flags");
-    var fs1 = flags_new();
-    var f_help    = flags_add_bool(fs1, 104, "help",    0, "h");
-    var f_version = flags_add_bool(fs1, 86,  "version", 0, "v");
-    var f_freq    = flags_add_int (fs1, 112, "freq",    7, "p");
-    var f_seed    = flags_add_int (fs1, 115, "seed",    0, "s");
-    var f_offset  = flags_add_int (fs1, 70,  "offset",  0, "F");
+    # ---- v0.3.0 — M2 flag-parser coverage (migrated to cmdit) -------
+    # Exercises `cmdit_parse_argv` over synthetic argv arrays. cmdit's
+    # own parser contract is asserted in its tests/cmdit.tcyr; here we
+    # verify anuenue's flag-set wiring: short/long forms, integer
+    # extraction, the additive `-s` + `-F` accumulator, the auto -h / -V
+    # short-circuits, and the error-variant dispatch. cmdit_new
+    # auto-registers --help/-h + --version/-V, so anuenue registers only
+    # freq/seed/offset and --help/--version surface as CMDIT_HELP /
+    # CMDIT_VERSION return codes (not queried bools).
+    test_group("M2 flags — --help short-circuits to CMDIT_HELP");
+    var fs1 = cmdit_new("anuenue");
+    var f_freq    = cmdit_int(fs1, 112, "freq",   7, "p");
+    var f_seed    = cmdit_int(fs1, 115, "seed",   0, "s");
+    var f_offset  = cmdit_int(fs1, 70,  "offset", 0, "F");
     # Argv: ["anuenue", "--help"]
     var argv1[8];
     store64(&argv1 + 0,  "anuenue");
     store64(&argv1 + 8,  "--help");
-    assert_eq(flags_parse(fs1, 2, &argv1), 0, "long --help parses clean");
-    assert_eq(flags_get_bool(fs1, f_help), 1, "--help → true");
-    assert_eq(flags_get_bool(fs1, f_version), 0, "--version untouched");
-    assert_eq(flags_get_int(fs1, f_freq), 7, "freq = default 7");
+    assert_eq(cmdit_parse_argv(fs1, 2, &argv1), CMDIT_HELP, "--help → CMDIT_HELP");
+    assert_eq(cmdit_get_int(fs1, f_freq), 7, "freq = default 7 (unset)");
 
-    test_group("M2 flags — short -V");
-    var fs2 = flags_new();
-    var f2_v = flags_add_bool(fs2, 86, "version", 0, "v");
+    test_group("M2 flags — short -V short-circuits to CMDIT_VERSION");
+    var fs2 = cmdit_new("anuenue");
     var argv2[8];
     store64(&argv2 + 0, "anuenue");
     store64(&argv2 + 8, "-V");
-    assert_eq(flags_parse(fs2, 2, &argv2), 0, "-V parses clean");
-    assert_eq(flags_get_bool(fs2, f2_v), 1, "-V → true");
+    assert_eq(cmdit_parse_argv(fs2, 2, &argv2), CMDIT_VERSION, "-V → CMDIT_VERSION");
 
     test_group("M2 flags — int -p / -s / -F");
-    var fs3 = flags_new();
-    var f3_p = flags_add_int(fs3, 112, "freq",   7, "p");
-    var f3_s = flags_add_int(fs3, 115, "seed",   0, "s");
-    var f3_F = flags_add_int(fs3, 70,  "offset", 0, "F");
+    var fs3 = cmdit_new("anuenue");
+    var f3_p = cmdit_int(fs3, 112, "freq",   7, "p");
+    var f3_s = cmdit_int(fs3, 115, "seed",   0, "s");
+    var f3_F = cmdit_int(fs3, 70,  "offset", 0, "F");
     # Argv: ["anuenue", "-p", "13", "-s", "42", "-F", "100"]
     var argv3[64];
     store64(&argv3 + 0,  "anuenue");
@@ -198,34 +192,34 @@ fn main(): i64 {
     store64(&argv3 + 32, "42");
     store64(&argv3 + 40, "-F");
     store64(&argv3 + 48, "100");
-    assert_eq(flags_parse(fs3, 7, &argv3), 0, "-p 13 -s 42 -F 100 parses clean");
-    assert_eq(flags_get_int(fs3, f3_p), 13,  "-p value extracted");
-    assert_eq(flags_get_int(fs3, f3_s), 42,  "-s value extracted");
-    assert_eq(flags_get_int(fs3, f3_F), 100, "-F value extracted");
+    assert_eq(cmdit_parse_argv(fs3, 7, &argv3), CMDIT_OK, "-p 13 -s 42 -F 100 parses clean");
+    assert_eq(cmdit_get_int(fs3, f3_p), 13,  "-p value extracted");
+    assert_eq(cmdit_get_int(fs3, f3_s), 42,  "-s value extracted");
+    assert_eq(cmdit_get_int(fs3, f3_F), 100, "-F value extracted");
 
     test_group("M2 flags — long --freq=N attached syntax");
-    var fs4 = flags_new();
-    var f4_p = flags_add_int(fs4, 112, "freq", 7, "p");
+    var fs4 = cmdit_new("anuenue");
+    var f4_p = cmdit_int(fs4, 112, "freq", 7, "p");
     var argv4[16];
     store64(&argv4 + 0, "anuenue");
     store64(&argv4 + 8, "--freq=99");
-    assert_eq(flags_parse(fs4, 2, &argv4), 0, "--freq=99 parses clean");
-    assert_eq(flags_get_int(fs4, f4_p), 99, "--freq=99 value extracted");
+    assert_eq(cmdit_parse_argv(fs4, 2, &argv4), CMDIT_OK, "--freq=99 parses clean");
+    assert_eq(cmdit_get_int(fs4, f4_p), 99, "--freq=99 value extracted");
 
     test_group("M2 flags — additive seed+offset semantics");
     # Verifies the main.cyr dispatch logic: PHASE_START = seed +
     # offset. -s 510 (green) + -F 510 (advance 2 sectors) = 1020 (blue).
-    var fs5 = flags_new();
-    var f5_s = flags_add_int(fs5, 115, "seed",   0, "s");
-    var f5_F = flags_add_int(fs5, 70,  "offset", 0, "F");
+    var fs5 = cmdit_new("anuenue");
+    var f5_s = cmdit_int(fs5, 115, "seed",   0, "s");
+    var f5_F = cmdit_int(fs5, 70,  "offset", 0, "F");
     var argv5[32];
     store64(&argv5 + 0,  "anuenue");
     store64(&argv5 + 8,  "-s");
     store64(&argv5 + 16, "510");
     store64(&argv5 + 24, "-F");
     store64(&argv5 + 32, "510");
-    assert_eq(flags_parse(fs5, 5, &argv5), 0, "-s 510 -F 510 parses clean");
-    var combined = flags_get_int(fs5, f5_s) + flags_get_int(fs5, f5_F);
+    assert_eq(cmdit_parse_argv(fs5, 5, &argv5), CMDIT_OK, "-s 510 -F 510 parses clean");
+    var combined = cmdit_get_int(fs5, f5_s) + cmdit_get_int(fs5, f5_F);
     assert_eq(combined, 1020, "seed + offset = 1020 (blue start)");
     # Confirm the resulting phase lands in sector 4 → blue at byte 0.
     var rgb5[24];
@@ -234,33 +228,32 @@ fn main(): i64 {
     assert_eq(load64(&rgb5 + 16), 255, "combined phase 1020 → B=255 (blue)");
 
     test_group("M2 flags — error variants");
-    # Unknown flag rejected.
-    var fs6 = flags_new();
-    flags_add_bool(fs6, 104, "help", 0, "h");
+    # Unknown flag rejected (help is auto-registered, so --bogus is unknown).
+    var fs6 = cmdit_new("anuenue");
     var argv6[16];
     store64(&argv6 + 0, "anuenue");
     store64(&argv6 + 8, "--bogus");
-    assert_eq(flags_parse(fs6, 2, &argv6), 0 - 1, "unknown flag rejected");
-    assert_eq(flags_error(fs6), FLAG_ERR_UNKNOWN, "error variant = UNKNOWN");
+    assert_eq(cmdit_parse_argv(fs6, 2, &argv6), CMDIT_RESULT_ERR, "unknown flag rejected");
+    assert_eq(cmdit_error(fs6), CMDIT_ERR_UNKNOWN, "error variant = UNKNOWN");
 
     # Missing value for int flag rejected.
-    var fs7 = flags_new();
-    flags_add_int(fs7, 112, "freq", 7, "p");
+    var fs7 = cmdit_new("anuenue");
+    cmdit_int(fs7, 112, "freq", 7, "p");
     var argv7[16];
     store64(&argv7 + 0, "anuenue");
     store64(&argv7 + 8, "-p");                 # no value follows
-    assert_eq(flags_parse(fs7, 2, &argv7), 0 - 1, "-p without value rejected");
-    assert_eq(flags_error(fs7), FLAG_ERR_MISSING_VALUE, "error variant = MISSING_VALUE");
+    assert_eq(cmdit_parse_argv(fs7, 2, &argv7), CMDIT_RESULT_ERR, "-p without value rejected");
+    assert_eq(cmdit_error(fs7), CMDIT_ERR_MISSING_VALUE, "error variant = MISSING_VALUE");
 
     # Bad integer value rejected.
-    var fs8 = flags_new();
-    flags_add_int(fs8, 112, "freq", 7, "p");
+    var fs8 = cmdit_new("anuenue");
+    cmdit_int(fs8, 112, "freq", 7, "p");
     var argv8[32];
     store64(&argv8 + 0,  "anuenue");
     store64(&argv8 + 8,  "-p");
     store64(&argv8 + 16, "notanumber");
-    assert_eq(flags_parse(fs8, 3, &argv8), 0 - 1, "non-numeric -p value rejected");
-    assert_eq(flags_error(fs8), FLAG_ERR_BAD_INT, "error variant = BAD_INT");
+    assert_eq(cmdit_parse_argv(fs8, 3, &argv8), CMDIT_RESULT_ERR, "non-numeric -p value rejected");
+    assert_eq(cmdit_error(fs8), CMDIT_ERR_BAD_INT, "error variant = BAD_INT");
 
     # ---- v0.4.0 — M3 UTF-8 sequence detection ---------------------
     # Synthetic byte buffers cover each path through utf8_seq_len
@@ -674,10 +667,10 @@ fn main(): i64 {
     assert_eq(_input_ends_with_lf(&nb, &nc, 0), 0, "0 clusters → false");
 
     test_group("M4 flags — -a / -d / -S parse");
-    var fs_a = flags_new();
-    var f_a_animate  = flags_add_bool(fs_a, 97,  "animate",  0, "a");
-    var f_a_duration = flags_add_int (fs_a, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
-    var f_a_speed    = flags_add_int (fs_a, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "S");
+    var fs_a = cmdit_new("anuenue");
+    var f_a_animate  = cmdit_bool(fs_a, 97,  "animate",  "a");
+    var f_a_duration = cmdit_int (fs_a, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
+    var f_a_speed    = cmdit_int (fs_a, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "S");
     var argv_a[40];
     store64(&argv_a + 0,  "anuenue");
     store64(&argv_a + 8,  "-a");
@@ -687,15 +680,15 @@ fn main(): i64 {
     var argv_a_2[16];
     store64(&argv_a_2 + 0, "anuenue");
     store64(&argv_a_2 + 8, "-a");
-    assert_eq(flags_parse(fs_a, 2, &argv_a_2), 0, "-a alone parses clean");
-    assert_eq(flags_get_bool(fs_a, f_a_animate), 1, "-a → animate true");
-    assert_eq(flags_get_int(fs_a, f_a_duration), ANUENUE_DEFAULT_DURATION_S, "duration = default");
-    assert_eq(flags_get_int(fs_a, f_a_speed), ANUENUE_DEFAULT_SPEED, "speed = default");
+    assert_eq(cmdit_parse_argv(fs_a, 2, &argv_a_2), CMDIT_OK, "-a alone parses clean");
+    assert_eq(cmdit_get_bool(fs_a, f_a_animate), 1, "-a → animate true");
+    assert_eq(cmdit_get_int(fs_a, f_a_duration), ANUENUE_DEFAULT_DURATION_S, "duration = default");
+    assert_eq(cmdit_get_int(fs_a, f_a_speed), ANUENUE_DEFAULT_SPEED, "speed = default");
 
-    var fs_b = flags_new();
-    var f_b_animate  = flags_add_bool(fs_b, 97,  "animate",  0, "a");
-    var f_b_duration = flags_add_int (fs_b, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
-    var f_b_speed    = flags_add_int (fs_b, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "S");
+    var fs_b = cmdit_new("anuenue");
+    var f_b_animate  = cmdit_bool(fs_b, 97,  "animate",  "a");
+    var f_b_duration = cmdit_int (fs_b, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
+    var f_b_speed    = cmdit_int (fs_b, 83,  "speed",    ANUENUE_DEFAULT_SPEED, "S");
     var argv_b[48];
     store64(&argv_b + 0,  "anuenue");
     store64(&argv_b + 8,  "-a");
@@ -703,22 +696,22 @@ fn main(): i64 {
     store64(&argv_b + 24, "12");
     store64(&argv_b + 32, "-S");
     store64(&argv_b + 40, "4");
-    assert_eq(flags_parse(fs_b, 6, &argv_b), 0, "-a -d 12 -S 4 parses clean");
-    assert_eq(flags_get_bool(fs_b, f_b_animate), 1, "-a → animate true");
-    assert_eq(flags_get_int(fs_b, f_b_duration), 12, "duration = 12");
-    assert_eq(flags_get_int(fs_b, f_b_speed), 4, "speed = 4");
+    assert_eq(cmdit_parse_argv(fs_b, 6, &argv_b), CMDIT_OK, "-a -d 12 -S 4 parses clean");
+    assert_eq(cmdit_get_bool(fs_b, f_b_animate), 1, "-a → animate true");
+    assert_eq(cmdit_get_int(fs_b, f_b_duration), 12, "duration = 12");
+    assert_eq(cmdit_get_int(fs_b, f_b_speed), 4, "speed = 4");
 
     # Long-form: --duration=N attached syntax (mirrors M2 --freq=N test).
-    var fs_c = flags_new();
-    var f_c_animate  = flags_add_bool(fs_c, 97,  "animate",  0, "a");
-    var f_c_duration = flags_add_int (fs_c, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
+    var fs_c = cmdit_new("anuenue");
+    var f_c_animate  = cmdit_bool(fs_c, 97,  "animate",  "a");
+    var f_c_duration = cmdit_int (fs_c, 100, "duration", ANUENUE_DEFAULT_DURATION_S, "d");
     var argv_c[24];
     store64(&argv_c + 0,  "anuenue");
     store64(&argv_c + 8,  "--animate");
     store64(&argv_c + 16, "--duration=0");
-    assert_eq(flags_parse(fs_c, 3, &argv_c), 0, "--animate --duration=0 parses clean");
-    assert_eq(flags_get_bool(fs_c, f_c_animate), 1, "--animate → true");
-    assert_eq(flags_get_int(fs_c, f_c_duration), 0, "duration = 0 ('until SIGINT' sentinel)");
+    assert_eq(cmdit_parse_argv(fs_c, 3, &argv_c), CMDIT_OK, "--animate --duration=0 parses clean");
+    assert_eq(cmdit_get_bool(fs_c, f_c_animate), 1, "--animate → true");
+    assert_eq(cmdit_get_int(fs_c, f_c_duration), 0, "duration = 0 ('until SIGINT' sentinel)");
 
     test_group("M8 audit — _pretag_clusters long-combiner chain");
     # docs/audit/2026-05-22-audit.md § Finding 1: a base codepoint

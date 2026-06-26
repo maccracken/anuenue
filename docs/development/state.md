@@ -5,6 +5,16 @@
 
 ## Version
 
+**1.1.4** — cut 2026-06-25. **CLI parsing → cmdit.** Dropped the stdlib `flags`
+parser for the `[deps.cmdit]` 1.1.0 distlib (cmdit IS that parser productized +
+extended, so byte-compatible): `flags_*` → `cmdit_*`, `cmdit_new` auto-registers
+`--help`/`--version`, `cmdit_parse` absorbs the hand-rolled `build_argv_array` bridge
+(the 256-arg cap + manual help/version regs gone — `src/main.cyr` −21 lines).
+`print_usage` keeps anuenue's intro/Usage/Examples framing and calls
+`cmdit_help_flags` (cmdit 1.1.0's table-only renderer) for the flag rows. No
+behavioural change: all six goldens byte-identical, three MONO checks hold, **242/242**
+unit tests green. anuenue is cmdit's second worked migration (after kii).
+
 **1.1.3** — cut 2026-06-19. **Toolchain + dep refresh.**
 Maintenance cut: cyrius pin `6.1.14` → `6.2.24` (`./lib/` re-synced
 via `cyrius lib sync`, 98 stdlib files) plus the first-party-dep
@@ -347,7 +357,8 @@ Direct (declared in `cyrius.cyml`):
 | `darshana` | 0.7.1 | ANSI color escape generation. Pin history: 0.5.1 (M1 truecolor `tty_fg_rgb_buf` / `tty_sgr_reset_buf`); 0.5.2 (M4 `tty_cursor_up(n)` / `tty_cursor_down(n)`); 0.5.3 (M6 sandhi closeout — `tty_isatty(fd)` / `tty_sgr_buf` / `tty_fg_256_buf`); 0.7.1 (v1.1.3 refresh — output byte-identical, no API shape change in the helpers anuenue calls). | Live. Filter path uses `tty_fg_rgb_buf` + `tty_sgr_reset_buf`; animation path additionally uses `tty_cursor_up`, `tty_cursor_hide`, `tty_cursor_show`, `tty_sgr_reset`. |
 | `sakshi` | 2.4.0 | Errors / tracing / structured logging | Standard wiring per first-party-standards. Bumped 2.2.5 → 2.4.0 at v1.1.3; unreachable surface DCE-eliminated. |
 | `agnostik` | 1.3.1 | Shared Result / Error shapes | Standard wiring. Bumped 1.2.2 → 1.3.1 at v1.1.3; ships two benign `duplicate symbol` warnings (`ERR_TIMEOUT` / `ERR_UNKNOWN`, "last definition wins") on unreachable code. |
-| Cyrius stdlib | n/a | string, fmt, alloc, io, vec, str, syscalls, assert, bench, args, flags, **chrono (M4)** | Auto-resolved via `cyrius deps`. `args` + `flags` added at M2; `chrono` added at M4 for frame timing (`sleep_ms`) and deadline math (`clock_now_ns`). |
+| `cmdit` | 1.1.0 | CLI / argument parsing (getopt-long; the stdlib `flags` parser productized + extended). Local sibling `../cmdit`. | **Adopted at v1.1.4** (the `flags` → cmdit migration; anuenue is cmdit's 2nd worked example after kii). `print_usage` uses `cmdit_help_flags` (cmdit 1.1.0's table-only renderer) to keep anuenue's custom help framing. |
+| Cyrius stdlib | n/a | string, fmt, alloc, io, vec, str, syscalls, assert, bench, args, **chrono (M4)** | Auto-resolved via `cyrius deps`. `args` added at M2; `flags` (added M2) **DROPPED at v1.1.4** when CLI parsing moved to `[deps.cmdit]`; `chrono` added at M4 for frame timing (`sleep_ms`) and deadline math (`clock_now_ns`). |
 
 No pre-release / pre-1.0 deps on the critical path. No external (non-AGNOS) deps.
 
