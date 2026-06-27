@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.5] — 2026-06-26
+
+### Fixed
+- **Rainbow collapsed to 16 colors on AGNOS — now truecolor (`src/color.cyr`).** `anuenue_detect_color_mode` skips the Linux `tty_isatty` check on agnos, then fell through to the `TERM`/`COLORTERM` env heuristics — but agnos sets no such env (`getenv` returns 0), so it landed on the final **16-color** fallback, where `_rgb_to_16` quantizes the smooth HSV rainbow down to just 6 ANSI colors ("color mixing isn't happening like Linux"). The agnos framebuffer console is **24-bit truecolor-capable** and its kernel SGR parser handles `ESC[38;2;R;G;Bm` directly (`fb_console.cyr` `fb_ansi_sgr`), so agnos now defaults to `ANUENUE_COLOR_TRUE` for the full gradient. `--color` / `--no-color` / `NO_COLOR` and `--color=16` / `=256` still override.
+
+### Changed
+- **Bumped the cyrius toolchain pin `6.2.24` → `6.2.44`** (`cyrius.cyml`) — aligns with the current ecosystem toolchain.
+
 ## [1.1.4] — 2026-06-25 (CLI parsing → cmdit)
 
 Adopts the **cmdit** distlib for CLI/argument parsing, dropping the stdlib `flags`

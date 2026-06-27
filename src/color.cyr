@@ -162,10 +162,20 @@ fn anuenue_detect_color_mode(no_color_flag, force_color, override): i64 {
         if (tty_isatty(STDOUT) == 0) { return ANUENUE_COLOR_MONO; }
         #endif
         # agnos: no isatty/ioctl (tty_isatty is darshana Linux-only), and output
-        # is the FB console (color wanted) with no shell `> file` redirection yet —
-        # so don't force MONO here; fall through to the TERM heuristics (→ 16-color
-        # default on agnos, where getenv returns 0).
+        # is the FB console (color always wanted, no shell `> file` redirection
+        # yet) — so don't force MONO here.
     }
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos: the framebuffer console is 24-bit truecolor-capable, and its kernel
+    # SGR parser handles `ESC[38;2;R;G;Bm` directly (fb_console.cyr `fb_ansi_sgr`).
+    # There is no TERM/COLORTERM env to sniff, so default to TRUECOLOR for the
+    # smooth HSV rainbow. Without this, the Linux env-heuristic path below falls
+    # through to 16-color (getenv returns 0 on agnos) and collapses the gradient
+    # to 6 ANSI colors — the "color mixing isn't happening like Linux" bug.
+    # --color / --no-color / NO_COLOR still override above; `--color=16` / `=256`
+    # still force those modes (override != AUTO returns early at the top).
+    return ANUENUE_COLOR_TRUE;
+    #endif
     # 5. COLORTERM signals truecolor support explicitly.
     var ct = getenv("COLORTERM");
     if (ct != 0) {
